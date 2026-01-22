@@ -1,0 +1,30 @@
+{
+  "name": "opencode-cursor",
+  "version": "1.0.0",
+  "description": "OpenCode plugin for Cursor Agent via stdin (fixes E2BIG errors)",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "prepublishOnly": "bun run build"
+  },
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "dependencies": {
+    "@opencode-ai/plugin": "latest"
+  },
+  "devDependencies": {
+    "@opencode-ai/sdk": "latest",
+    "typescript": "^5.8.0"
+  },
+  "peerDependencies": {
+    "bun-types": "latest"
+  },
+  "license": "ISC"
+}
