@@ -57,9 +57,13 @@ export const cursorACP: Plugin = async ({ client }) => {
 
       // Build prompt from OpenCode messages
       const messages = input.messages || [];
+      // Format messages with clear delimiters for cursor-agent
       const prompt = messages
-        .map(m => `${m.role}: ${m.content}`)
-        .join("\n\n");
+        .map(m => {
+          const role = m.role === "assistant" ? "assistant" : m.role === "system" ? "system" : "user";
+          return `<|${role}|>\n${typeof m.content === 'string' ? m.content : JSON.stringify(m.content)}\n<|end|>`;
+        })
+        .join("\n");
 
       // Spawn cursor-agent with prompt via stdin
       const args = [
