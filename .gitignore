@@ -4,3 +4,5 @@ dist/
 .DS_Store
 bun.lock
 installer
+opencode-cursor-installer
+opencode-cursor-*.log

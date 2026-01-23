@@ -123,17 +123,25 @@ func cursorAgentLoggedIn() bool {
 	return !strings.Contains(string(output), "Not logged in")
 }
 
-// getProjectDir returns the directory containing this installer
 func getProjectDir() string {
+	if envDir := os.Getenv("OPENCODE_CURSOR_PROJECT_DIR"); envDir != "" {
+		return envDir
+	}
+	if cwd, err := os.Getwd(); err == nil {
+		for {
+			if _, err := os.Stat(filepath.Join(cwd, "package.json")); err == nil {
+				return cwd
+			}
+			parent := filepath.Dir(cwd)
+			if parent == cwd {
+				break
+			}
+			cwd = parent
+		}
+	}
 	exe, err := os.Executable()
 	if err != nil {
-		return "/home/nomadx/opencode-cursor"
+		return "."
 	}
-	// Follow symlink if needed
-	real, err := filepath.EvalSymlinks(exe)
-	if err != nil {
-		return filepath.Dir(exe)
-	}
-	// Go up from cmd/installer to project root
-	return filepath.Dir(filepath.Dir(filepath.Dir(real)))
+	return filepath.Dir(exe)
 }
