@@ -2,6 +2,8 @@
 
 A lightweight OpenCode plugin for Cursor Agent integration via stdin (fixes E2BIG errors).
 
+> **⚠️ WIP**: This plugin is currently under development. While the plugin structure is correct and loads without errors, there's an ongoing investigation into a Bun/opencode segfault issue that occurs when the plugin is loaded. The plugin exports are correct and match working plugins, but the root cause of the segfault needs to be identified.
+
 ## Installation
 
 ### One-Line Install (Fastest)
