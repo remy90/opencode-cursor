@@ -4,7 +4,6 @@
   "description": "OpenCode plugin for Cursor Agent via stdin (fixes E2BIG errors)",
   "type": "module",
   "main": "dist/index.js",
-  "types": "dist/index.d.ts",
   "scripts": {
     "build": "bun build ./src/index.ts --outdir ./dist --target node --external \"@agentclientprotocol/sdk\"",
     "dev": "bun build ./src/index.ts --outdir ./dist --target node --external \"@agentclientprotocol/sdk\" --watch",
@@ -19,14 +18,12 @@
   "files": [
     "dist"
   ],
-  "dependencies": {
-    "@agentclientprotocol/sdk": "^0.13.1",
-    "@opencode-ai/plugin": "latest"
-  },
   "devDependencies": {
+    "@ai-sdk/openai-compatible": "^2.0.21",
     "@opencode-ai/sdk": "latest",
-    "typescript": "^5.8.0",
-    "@types/node": "^22.0.0"
+    "@types/node": "^22.0.0",
+    "ai": "^6.0.55",
+    "typescript": "^5.8.0"
   },
   "peerDependencies": {
     "bun-types": "latest"

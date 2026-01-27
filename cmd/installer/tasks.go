@@ -202,11 +202,8 @@ func updateConfig(m *model) error {
 	}
 
 	providers["cursor-acp"] = map[string]interface{}{
-		"npm":  "@ai-sdk/openai-compatible",
-		"name": "Cursor Agent (ACP stdin)",
-		"options": map[string]interface{}{
-			"baseURL": "http://127.0.0.1:32123/v1",
-		},
+		"npm":    "opencode-cursor",
+		"name":   "Cursor Agent",
 		"models": models,
 	}
 

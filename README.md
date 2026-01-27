@@ -1,136 +1,164 @@
-![header](docs/header.png)
+# OpenCode-Cursor: AI SDK Provider Implementation
 
-A lightweight OpenCode plugin for Cursor Agent integration via stdin (fixes E2BIG errors). Includes automatic rollback and backup system for safe installation.
+## What's Fixed
 
-## Installation
+This project has been completely rewritten to use the **correct AI SDK provider pattern** instead of the broken OpenCode plugin approach.
 
-**Quick install with automated setup and rollback**:
+### Key Changes
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/nomadcxx/opencode-cursor/main/install.sh | bash
+**Before (Broken):**
+- Used `@opencode-ai/plugin` SDK (wrong pattern for providers)
+- Attempted to create HTTP bridge (unnecessary complexity)
+- Configured `http://127.0.0.1:32123/v1` but no server existed
+
+**After (Fixed):**
+- Uses `@ai-sdk/provider` SDK (correct pattern)
+- Creates proper `LanguageModel` instances
+- Uses `customProvider()` function to register as provider
+- Works with OpenCode's internal HTTP proxy system
+- Leverages existing `SimpleCursorClient` for cursor-agent communication
+- No HTTP server needed - AI SDK handles HTTP proxy internally
+
+---
+
+## How It Works
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────┐
+│                    OpenCode                            │
+│                                                         │
+│  ┌──────────────────────────────────────────────────┐    │
+│  │  Provider System (@ai-sdk/provider)       │    │
+│  │                                            │    │
+│  │  ┌──────────────────────────────────────┐    │    │
+│  │  │  cursorProvider (@ai-sdk/provider)   │    │
+│  │  │  - Implements customProvider()       │    │
+│  │  │  - Wraps SimpleCursorClient         │    │
+│  │  │  - Returns LanguageModel objects    │    │
+│  │  └──────────────────────────────────────┘    │
+│  └──────────────────────────────────────────────────┘    │
+│                      │    │
+│  ▼ Request from User                     │    │
+│              │    │
+│  ┌──────────────────────────────────────────┐    │
+│  │  cursor-agent (subprocess)             │    │
+│  │  - Spawned via SimpleCursorClient   │    │
+│  │  - Communicates via stdin/stdout      │    │
+│  └───────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────────┘
 ```
 
-The installer automatically:
-- Installs to `~/.local/share/opencode-cursor` (permanent location for uninstall)
-- Checks prerequisites (bun, cursor-agent, OpenCode)
-- Builds the plugin
-- Installs ACP SDK to `~/.config/opencode/node_modules/` (externalized to avoid Bun segfault)
-- Creates plugin symlink to `~/.config/opencode/plugin/cursor-acp.js`
-- Adds cursor-acp provider with 30 Cursor models
-- **Creates backups** before each operation
-- **Auto-rollback** if any step fails
-- Verifies installation with `opencode models`
+### Data Flow
 
-**Manual install**:
+1. **OpenCode** requests model: `cursor-acp/gpt-5.1`
+2. **AI SDK** calls `cursorProvider.languageModel("cursor-acp/gpt-5.1")`
+3. **Provider** calls `SimpleCursorClient.executePrompt()`
+4. **Client** spawns `cursor-agent` with stdin/stdout
+5. **Cursor Agent** returns JSON output
+6. **Provider** converts to AI SDK format and returns text
 
-```bash
-git clone https://github.com/nomadcxx/opencode-cursor.git
-cd opencode-cursor
-bun install && bun run build
-cd ~/.config/opencode && bun add @agentclientprotocol/sdk@^0.13.1
-mkdir -p ~/.config/opencode/plugin
-ln -s $(pwd)/dist/index.js ~/.config/opencode/plugin/cursor-acp.js
-```
-
-**Note**: The plugin externalizes ACP SDK to avoid Bun's segfault bug with large bundles. ACP SDK is installed to `~/.config/opencode/node_modules/`.
-
-**Safety Features**:
-- Backup system creates copies of all modified files before changes
-- Automatic rollback if any installation step fails
-- Clean uninstall removes everything with safety backups
+---
 
 ## Usage
 
-Select `cursor-acp/auto` as your model in OpenCode.
+### Installation
 
+**Automated Installation:**
 ```bash
-opencode "Hello world" --model=cursor-acp/auto
+# Quick install (recommended)
+npm install opencode-cursor
 ```
 
-## Available Models
+The npm package automatically:
+- Installs the provider to OpenCode's package.json
+- Adds cursor-acp provider configuration
+- No manual configuration needed
 
-The cursor-acp provider includes 30 Cursor Agent models:
+### Models Available
+
+All Cursor Agent models are available:
+
 - `cursor-acp/auto` - Automatic model selection
+- `cursor-acp/gpt-5.1` - GPT-5.1
 - `cursor-acp/gpt-5.2` - GPT-5.2
+- `cursor-acp/claude-4.5-sonnet` - Claude 4.5 Sonnet
+- `cursor-acp/claude-4.5-sonnet-thinking` - Claude 4.5 Sonnet Thinking
+- `cursor-acp/claude-4.5-opus` - Claude 4.5 Opus
+- `cursor-acp/claude-4.5-haiku` - Claude 4.5 Haiku
+- `cursor-acp/gemini-3-flash` - Gemini 3 Flash
 - `cursor-acp/gemini-3-pro` - Gemini 3 Pro
-- `cursor-acp/opus-4.5-thinking` - Claude 4.5 Opus with extended thinking
-- `cursor-acp/sonnet-4.5` - Claude 4.5 Sonnet
 - `cursor-acp/deepseek-v3.2` - DeepSeek V3.2
-- And 24 more models (composer-1, grok-4, kimi-k2, etc.)
+- `cursor-acp/composer-1` - Cursor Composer 1
+- `cursor-acp/grok-4` - Grok 4
+- `cursor-acp/kimi-k2` - Kimi K2
+- And 21 more models
 
-## Features
+### Example: OpenCode Config
 
-- stdin/stdout communication (no E2BIG argument limit errors)
-- Full streaming support
-- Tool calling support
-- ACP protocol (works with OpenCode, Zed, JetBrains, neovim)
-- Session persistence
-- Automatic retry with exponential backoff
-- **Built-in logging and error handling**
-
-## Safety Features
-
-**Automatic Rollback System**:
-1. Backups created before every file modification
-2. Automatic restoration if any installation step fails
-3. Clean uninstall with safety backups
-4. No broken OpenCode installs left behind
-
-**Uninstall / Rollback**:
-
-The installer installs to `~/.local/share/opencode-cursor` for permanent access. To uninstall:
-
-```bash
-cd ~/.local/share/opencode-cursor
-./installer --uninstall
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "agent": {
+    "default": {
+      "model": "cursor-acp/gpt-5.1"
+    }
+  }
+}
 ```
 
-If running from a downloaded copy:
-```bash
-cd /path/to/opencode-cursor
-./installer --uninstall
+### Example: Programmatic Usage
+
+```typescript
+import { generateText } from "ai";
+
+const result = await generateText({
+  model: "cursor-acp/gpt-5.1",
+  prompt: "Write a function to add two numbers",
+});
+
+console.log(result.text);
 ```
 
-Removes:
-- Plugin symlink (`~/.config/opencode/plugin/cursor-acp.js`)
-- ACP SDK from `~/.config/opencode/node_modules/`
-- Provider config from `~/.config/opencode/opencode.json`
-- Old `opencode-cursor-auth` plugin reference
-- **With safety backups created first**
+---
 
-## Why This Approach
-
-CLI argument passing fails with E2BIG errors. HTTP proxies add daemon overhead. This plugin uses stdin/stdout for simple, direct communication.
-
-## Prerequisites
-
-- bun (`curl -fsSL https://bun.sh/install | bash`)
-- cursor-agent (`curl -fsS https://cursor.com/install | bash`)
-- OpenCode (`curl -fsSL https://opencode.ai/install | bash`)
-- Go 1.21+ (installer)
-
-## Development
+## Building for Development
 
 ```bash
-bun install
-bun run build  # or bun run dev for watch mode
-./install.sh --debug  # Run installer in debug mode
+# Install dependencies
+npm install
+
+# Build
+npm run build
+
+# Test changes
+npm test
 ```
 
-## Troubleshooting
+---
 
-**Installation failed?** The installer automatically rolls back all changes. Check the log file for details.
+## Implementation Details
 
-**Cursor-acp not appearing in models?** Run the installer with `--debug` flag:
-```bash
-./install.sh --debug
-```
+- **File**: `src/provider.ts` - Complete rewrite using `@ai-sdk/provider`
+- **Client**: `src/client/simple.ts` - Unchanged, wraps cursor-agent
+- **Config**: Uses `SimpleCursorClient` directly
+- **No HTTP server needed** - AI SDK handles HTTP proxy internally
+- **No plugin hooks needed** - Provider pattern is correct approach
 
-**Manual cleanup**: Use the uninstaller even after failed installs:
-```bash
-./installer --uninstall
-```
+---
 
 ## License
 
 ISC
+
+## Installation
+
+```bash
+npm install opencode-cursor
+```
+
+The npm package automatically:
+- Installs provider to OpenCode's package.json
+- Adds cursor-acp provider configuration
+- No manual configuration needed
