@@ -89,39 +89,27 @@ func buildPlugin(m *model) error {
 }
 
 func installAcpSdk(m *model) error {
-	// Get opencode's config directory node_modules path
+	if err := createBackup(m, m.configPath); err != nil {
+		return fmt.Errorf("failed to backup config: %w", err)
+	}
+
 	configDir, _ := getConfigDir()
 	opencodeNodeModules := filepath.Join(configDir, "opencode", "node_modules")
 
-	// Check if ACP SDK already exists in opencode's node_modules
 	acpPath := filepath.Join(opencodeNodeModules, "@agentclientprotocol", "sdk")
 	if _, err := os.Stat(acpPath); err == nil {
-		// Already installed
 		return nil
 	}
 
-	// Create package.json in opencode config dir if it doesn't exist
-	opencodeConfigDir := filepath.Join(configDir, "opencode")
-	packageJsonPath := filepath.Join(opencodeConfigDir, "package.json")
-
-	_, err := os.Stat(packageJsonPath)
-	if os.IsNotExist(err) {
-		// Create minimal package.json
-		initialPkg := `{
-  "name": "opencode-config",
-  "dependencies": {
-    "@opencode-ai/plugin": "latest"
-  }
-}`
-		if err := os.WriteFile(packageJsonPath, []byte(initialPkg), 0644); err != nil {
-			return fmt.Errorf("failed to create package.json: %w", err)
-		}
+	packageJsonPath := filepath.Join(configDir, "opencode", "package.json")
+	if err := createBackup(m, packageJsonPath); err != nil {
+		return fmt.Errorf("failed to backup package.json: %w", err)
 	}
 
-	// Install ACP SDK to opencode's node_modules using bun
 	installCmd := exec.Command("bun", "add", "@agentclientprotocol/sdk@^0.13.1")
-	installCmd.Dir = opencodeConfigDir
+	installCmd.Dir = filepath.Join(configDir, "opencode")
 	if err := runCommand("bun add @agentclientprotocol/sdk", installCmd, m.logFile); err != nil {
+		cleanupBackups(m)
 		return fmt.Errorf("failed to install ACP SDK: %w", err)
 	}
 
@@ -129,23 +117,25 @@ func installAcpSdk(m *model) error {
 }
 
 func createSymlink(m *model) error {
-	// Ensure plugin directory exists
 	if err := os.MkdirAll(m.pluginDir, 0755); err != nil {
 		return fmt.Errorf("failed to create plugin directory: %w", err)
 	}
 
 	symlinkPath := filepath.Join(m.pluginDir, "cursor-acp.js")
+
+	if _, err := os.Lstat(symlinkPath); err == nil {
+		if err := createBackup(m, symlinkPath); err != nil {
+			return fmt.Errorf("failed to backup symlink: %w", err)
+		}
+		os.Remove(symlinkPath)
+	}
+
 	targetPath := filepath.Join(m.projectDir, "dist", "index.js")
 
-	// Remove existing symlink if present
-	os.Remove(symlinkPath)
-
-	// Create symlink
 	if err := os.Symlink(targetPath, symlinkPath); err != nil {
 		return fmt.Errorf("failed to create symlink: %w", err)
 	}
 
-	// Verify symlink resolves
 	if _, err := os.Stat(symlinkPath); err != nil {
 		return fmt.Errorf("symlink verification failed: %w", err)
 	}
@@ -154,7 +144,10 @@ func createSymlink(m *model) error {
 }
 
 func updateConfig(m *model) error {
-	// Read existing config or create new
+	if err := createBackup(m, m.configPath); err != nil {
+		return fmt.Errorf("failed to backup config: %w", err)
+	}
+
 	var config map[string]interface{}
 
 	data, err := os.ReadFile(m.configPath)
@@ -162,7 +155,6 @@ func updateConfig(m *model) error {
 		if !os.IsNotExist(err) {
 			return fmt.Errorf("failed to read config: %w", err)
 		}
-		// Create new config
 		config = make(map[string]interface{})
 	} else {
 		if err := json.Unmarshal(data, &config); err != nil {
@@ -178,12 +170,44 @@ func updateConfig(m *model) error {
 	}
 
 	// Add cursor-acp provider
+	models := map[string]interface{}{
+		"auto":                    map[string]interface{}{"name": "Cursor Agent Auto"},
+		"composer-1":              map[string]interface{}{"name": "Cursor Agent Composer 1"},
+		"deepseek-v3.2":           map[string]interface{}{"name": "Cursor Agent DeepSeek V3.2"},
+		"gemini-3-flash":          map[string]interface{}{"name": "Cursor Agent Gemini 3 Flash"},
+		"gemini-3-pro":            map[string]interface{}{"name": "Cursor Agent Gemini 3 Pro"},
+		"gemini-3-pro-preview":    map[string]interface{}{"name": "Cursor Agent Gemini 3 Pro Preview"},
+		"gpt-5":                   map[string]interface{}{"name": "Cursor Agent GPT-5 (alias → gpt-5.2)"},
+		"gpt-5-mini":              map[string]interface{}{"name": "Cursor Agent GPT-5 Mini"},
+		"gpt-5-pro":               map[string]interface{}{"name": "Cursor Agent GPT-5 Pro"},
+		"gpt-5.1":                 map[string]interface{}{"name": "Cursor Agent GPT-5.1"},
+		"gpt-5.1-codex":           map[string]interface{}{"name": "Cursor Agent GPT-5.1 Codex"},
+		"gpt-5.1-codex-max-xhigh": map[string]interface{}{"name": "Cursor Agent GPT-5.1 Codex Max XHigh"},
+		"gpt-5.1-codex-mini-high": map[string]interface{}{"name": "Cursor Agent GPT-5.1 Codex Mini High"},
+		"gpt-5.1-high":            map[string]interface{}{"name": "Cursor Agent GPT-5.1 High"},
+		"gpt-5.2":                 map[string]interface{}{"name": "Cursor Agent GPT-5.2"},
+		"gpt-5.2-codex":           map[string]interface{}{"name": "Cursor Agent GPT-5.2 Codex"},
+		"gpt-5.2-high":            map[string]interface{}{"name": "Cursor Agent GPT-5.2 High"},
+		"gpt-5.2-xhigh":           map[string]interface{}{"name": "Cursor Agent GPT-5.2 XHigh"},
+		"grok-4":                  map[string]interface{}{"name": "Cursor Agent Grok 4"},
+		"grok-4-fast":             map[string]interface{}{"name": "Cursor Agent Grok 4 Fast"},
+		"grok-code":               map[string]interface{}{"name": "Cursor Agent Grok Code"},
+		"grok-code-fast":          map[string]interface{}{"name": "Cursor Agent Grok Code Fast"},
+		"haiku-4.5":               map[string]interface{}{"name": "Cursor Agent Claude 4.5 Haiku"},
+		"kimi-k2":                 map[string]interface{}{"name": "Cursor Agent Kimi K2"},
+		"opus-4.5":                map[string]interface{}{"name": "Cursor Agent Claude 4.5 Opus"},
+		"opus-4.5-thinking":       map[string]interface{}{"name": "Cursor Agent Claude 4.5 Opus Thinking"},
+		"sonnet-4.5":              map[string]interface{}{"name": "Cursor Agent Claude 4.5 Sonnet"},
+		"sonnet-4.5-thinking":     map[string]interface{}{"name": "Cursor Agent Claude 4.5 Sonnet Thinking"},
+	}
+
 	providers["cursor-acp"] = map[string]interface{}{
 		"npm":  "@ai-sdk/openai-compatible",
 		"name": "Cursor Agent (ACP stdin)",
 		"options": map[string]interface{}{
 			"baseURL": "http://127.0.0.1:32123/v1",
 		},
+		"models": models,
 	}
 
 	// Write config back
@@ -263,6 +287,47 @@ func verifyPostInstall(m *model) error {
 	return fmt.Errorf("cursor-acp provider not found - plugin may not be installed correctly. OpenCode output: %s", string(output))
 }
 
+// Backup and restore functions
+func createBackup(m *model, path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("failed to read file for backup: %w", err)
+	}
+
+	m.backupFiles[path] = data
+	return nil
+}
+
+func restoreBackup(m *model, path string) error {
+	if backupData, exists := m.backupFiles[path]; exists {
+		if err := os.WriteFile(path, backupData, 0644); err != nil {
+			return fmt.Errorf("failed to restore backup: %w", err)
+		}
+		delete(m.backupFiles, path)
+	}
+	return nil
+}
+
+func restoreAllBackups(m *model) error {
+	for path, data := range m.backupFiles {
+		if err := os.WriteFile(path, data, 0644); err != nil {
+			return fmt.Errorf("failed to restore %s: %w", path, err)
+		}
+	}
+	m.backupFiles = make(map[string][]byte)
+	return nil
+}
+
+func cleanupBackups(m *model) {
+	for path := range m.backupFiles {
+		os.Remove(path)
+	}
+	m.backupFiles = make(map[string][]byte)
+}
+
 // Uninstall functions
 func (m model) startUninstallation() (tea.Model, tea.Cmd) {
 	m.step = stepUninstalling
@@ -300,14 +365,47 @@ func removeSymlink(m *model) error {
 
 func removeAcpSdk(m *model) error {
 	configDir, _ := getConfigDir()
-	opencodeNodeModules := filepath.Join(configDir, "opencode", "node_modules", "@agentclientprotocol")
+	opencodeConfigDir := filepath.Join(configDir, "opencode")
+	acpPath := filepath.Join(opencodeConfigDir, "node_modules", "@agentclientprotocol", "sdk")
 
-	acpPath := filepath.Join(opencodeNodeModules, "sdk")
 	if _, err := os.Stat(acpPath); os.IsNotExist(err) {
 		return nil
 	}
 
-	if err := os.RemoveAll(opencodeNodeModules); err != nil {
+	packageJsonPath := filepath.Join(opencodeConfigDir, "package.json")
+	if _, err := os.Stat(packageJsonPath); err == nil {
+		if err := createBackup(m, packageJsonPath); err != nil {
+			return fmt.Errorf("failed to backup package.json: %w", err)
+		}
+
+		data, err := os.ReadFile(packageJsonPath)
+		if err != nil {
+			return fmt.Errorf("failed to read package.json: %w", err)
+		}
+
+		var packageJson map[string]interface{}
+		if err := json.Unmarshal(data, &packageJson); err != nil {
+			return fmt.Errorf("failed to parse package.json: %w", err)
+		}
+
+		if dependencies, ok := packageJson["dependencies"].(map[string]interface{}); ok {
+			if _, hasAcpSdk := dependencies["@agentclientprotocol/sdk"]; hasAcpSdk {
+				delete(dependencies, "@agentclientprotocol/sdk")
+				packageJson["dependencies"] = dependencies
+
+				output, err := json.MarshalIndent(packageJson, "", "  ")
+				if err != nil {
+					return fmt.Errorf("failed to serialize package.json: %w", err)
+				}
+
+				if err := os.WriteFile(packageJsonPath, output, 0644); err != nil {
+					return fmt.Errorf("failed to write package.json: %w", err)
+				}
+			}
+		}
+	}
+
+	if err := os.RemoveAll(filepath.Join(opencodeConfigDir, "node_modules", "@agentclientprotocol")); err != nil {
 		return fmt.Errorf("failed to remove ACP SDK: %w", err)
 	}
 
@@ -315,11 +413,14 @@ func removeAcpSdk(m *model) error {
 }
 
 func removeProviderConfig(m *model) error {
+	if err := createBackup(m, m.configPath); err != nil {
+		return fmt.Errorf("failed to backup config: %w", err)
+	}
+
 	// Read existing config
 	data, err := os.ReadFile(m.configPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			// Config doesn't exist, nothing to remove
 			return nil
 		}
 		return fmt.Errorf("failed to read config: %w", err)
@@ -372,6 +473,10 @@ func validateConfigAfterUninstall(m *model) error {
 func removeOldPlugin(m *model) error {
 	configDir, _ := getConfigDir()
 	configPath := filepath.Join(configDir, "opencode", "opencode.json")
+
+	if err := createBackup(m, configPath); err != nil {
+		return fmt.Errorf("failed to backup config: %w", err)
+	}
 
 	data, err := os.ReadFile(configPath)
 	if err != nil {
@@ -436,7 +541,15 @@ func (m model) handleTaskComplete(msg taskCompleteMsg) (tea.Model, tea.Cmd) {
 			message: msg.err,
 			logFile: m.logFile.Name(),
 		}
-		// If not optional, stop installation
+
+		if !task.optional && len(m.backupFiles) > 0 && !m.isUninstall {
+			if err := restoreAllBackups(&m); err != nil {
+				m.errors = append(m.errors, msg.err+" (rollback failed: "+err.Error())
+			} else {
+				m.errors = append(m.errors, msg.err+" (rolled back)")
+			}
+		}
+
 		if !task.optional {
 			m.errors = append(m.errors, msg.err)
 			m.step = stepComplete
@@ -447,6 +560,7 @@ func (m model) handleTaskComplete(msg taskCompleteMsg) (tea.Model, tea.Cmd) {
 	// Move to next task
 	m.currentTaskIndex++
 	if m.currentTaskIndex >= len(m.tasks) {
+		cleanupBackups(&m)
 		m.step = stepComplete
 		return m, nil
 	}

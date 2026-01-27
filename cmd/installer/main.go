@@ -39,8 +39,8 @@ func newModel(debugMode bool, logFile *os.File) model {
 		pluginDir:     filepath.Join(configDir, "opencode", "plugin"),
 		configPath:    configPath,
 		existingSetup: existingSetup,
+		backupFiles:   make(map[string][]byte),
 
-		// Animations (initialized on first resize)
 		beams:  nil,
 		ticker: NewTypewriterTicker(),
 	}

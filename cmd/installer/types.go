@@ -87,6 +87,9 @@ type model struct {
 	// Context for cancellation
 	ctx    context.Context
 	cancel context.CancelFunc
+
+	// Backup files for rollback
+	backupFiles map[string][]byte
 }
 
 // Messages
