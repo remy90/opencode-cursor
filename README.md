@@ -73,7 +73,7 @@ The proxy server exposes:
 
 ## Tool Calling Bridge
 
-Register and execute OpenCode tools through the tool registry:
+Register and execute OpenCode tools through the tool registry. The plugin includes 7 default tools: **bash**, **read**, **write**, **edit**, **grep**, **ls**, and **glob**.
 
 ```typescript
 import { ToolRegistry, ToolExecutor } from 'opencode-cursor';
@@ -194,7 +194,8 @@ src/
 │   ├── types.ts       # Tool types
 │   ├── registry.ts    # Tool registry
 │   ├── executor.ts    # Tool executor
-│   └── mapper.ts      # Schema mapper
+│   ├── mapper.ts      # Schema mapper
+│   └── defaults.ts    # Default tool registrations (bash, read, write, edit, grep, ls, glob)
 ├── models/
 │   ├── types.ts       # Model types
 │   ├── discovery.ts   # Model discovery service
@@ -351,8 +352,9 @@ bun test v1.3.6
   ✓ ModelDiscoveryService (3 tests)
   ✓ ConfigUpdater (3 tests)
   ✓ Model Discovery Integration (2 tests)
+  ✓ Default Tools (7 tests)
 
-  80+ pass
+  29+ pass for new features
   0 fail
 ```
 
