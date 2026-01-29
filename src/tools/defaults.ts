@@ -160,7 +160,7 @@ export function registerDefaultTools(registry: ToolRegistry): void {
         return `Error: Could not find the text to replace in ${args.path}`;
       }
 
-      content = content.replace(args.old_string, args.new_string);
+      content = content.replaceAll(args.old_string, args.new_string);
       fs.writeFileSync(args.path, content, "utf-8");
 
       return `File edited successfully: ${args.path}`;
