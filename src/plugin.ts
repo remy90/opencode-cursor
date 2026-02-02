@@ -488,10 +488,9 @@ export const CursorPlugin: Plugin = async ({ $, directory }: PluginInput) => {
               const { url, instructions, callback } = await startCursorOAuth();
               log.debug("Got OAuth URL", { url: url.substring(0, 50) + "..." });
               return {
-                type: "oauth",
                 url,
                 instructions,
-                method: "auto",
+                method: "auto" as const,
                 callback,
               };
             } catch (error) {
