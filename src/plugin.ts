@@ -290,6 +290,34 @@ async function ensureCursorProxyServer(workspaceDirectory: string): Promise<stri
         return;
       }
 
+      // Dynamic model discovery via cursor-agent --list-models (Node.js handler)
+      if (url.pathname === "/v1/models" || url.pathname === "/models") {
+        try {
+          const { execSync } = await import("child_process");
+          const output = execSync("cursor-agent --list-models", { encoding: "utf-8", timeout: 30000 });
+          const clean = stripAnsi(output);
+          const models: Array<{ id: string; object: string; created: number; owned_by: string }> = [];
+          for (const line of clean.split("\n")) {
+            const match = line.match(/^([a-z0-9.-]+)\s+-\s+(.+?)(?:\s+\((current|default)\))*\s*$/i);
+            if (match) {
+              models.push({
+                id: match[1],
+                object: "model",
+                created: Math.floor(Date.now() / 1000),
+                owned_by: "cursor",
+              });
+            }
+          }
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ object: "list", data: models }));
+        } catch (err) {
+          log.error("Failed to list models", { error: String(err) });
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Failed to fetch models" }));
+        }
+        return;
+      }
+
       if (url.pathname !== "/v1/chat/completions" && url.pathname !== "/chat/completions") {
         res.writeHead(404, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: `Unsupported path: ${url.pathname}` }));
