@@ -118,12 +118,19 @@ Common models: `auto`, `sonnet-4.5`, `opus-4.5`, `gpt-5.2`, `gemini-3-pro`, `gro
 ## Architecture
 
 ```mermaid
-flowchart LR
-    OC[OpenCode] -->|HTTP| P["cursor-acp plugin\n(:32124)"]
-    P -->|spawn| CA[cursor-agent]
-    CA --> API[Cursor API]
+flowchart TB
+    OC["OpenCode"]
+    SDK["@ai-sdk/openai-compatible\nbaseURL http://localhost:32124/v1"]
+    PLUGIN["cursor-acp plugin\nHTTP :32124\nPOST /v1/chat/completions\nGET /v1/models\nSSE streaming"]
+    CA["cursor-agent\nstdin → prompt\nstdout → response"]
+    AUTH["~/.cursor/auth.json\nOAuth token"]
+    API["Cursor API"]
 
-    TK["~/.cursor/auth.json"] -.->|read| CA
+    OC --> SDK
+    SDK -->|HTTP| PLUGIN
+    PLUGIN -->|spawn| CA
+    AUTH -.->|read| CA
+    CA -->|HTTPS| API
 ```
 
 Auth token is created once via `opencode auth login` or `cursor-agent login`. After that, `cursor-agent` reads it automatically on each request.
