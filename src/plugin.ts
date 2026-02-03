@@ -362,7 +362,7 @@ async function ensureCursorProxyServer(workspaceDirectory: string): Promise<stri
         "cursor-agent",
         "--print",
         "--output-format",
-        stream ? "stream-json" : "text",
+        "text", // Always use text format (stream-json outputs OpenCode protocol)
         "--workspace",
         workspaceDirectory,
         "--model",

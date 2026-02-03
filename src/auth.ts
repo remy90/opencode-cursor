@@ -113,12 +113,13 @@ export async function startCursorOAuth(): Promise<{
 }
 
 export function verifyCursorAuth(): boolean {
-  const authFile = join(homedir(), ".cursor", "auth.json");
+  // cursor-agent stores auth in ~/.config/cursor/auth.json (not ~/.cursor/)
+  const authFile = join(homedir(), ".config", "cursor", "auth.json");
   const exists = existsSync(authFile);
   log.debug("Checking auth file", { path: authFile, exists });
   return exists;
 }
 
 export function getAuthFilePath(): string {
-  return join(homedir(), ".cursor", "auth.json");
+  return join(homedir(), ".config", "cursor", "auth.json");
 }

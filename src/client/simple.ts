@@ -51,7 +51,7 @@ export class SimpleCursorClient {
     const args = [
       '--print',
       '--output-format',
-      'stream-json',
+      'text', // Use text format (stream-json outputs OpenCode protocol)
       '--stream-partial-output',
       '--model',
       model
@@ -165,7 +165,7 @@ export class SimpleCursorClient {
     const args = [
       '--print',
       '--output-format',
-      'stream-json',
+      'text', // Use text format (stream-json outputs OpenCode protocol)
       '--stream-partial-output',
       '--model',
       model
