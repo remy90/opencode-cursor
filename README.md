@@ -25,7 +25,14 @@ bun install && bun run build
 ln -s $(pwd)/dist/index.js ~/.config/opencode/plugin/cursor-acp.js
 ```
 
-Add to `~/.config/opencode/opencode.json`:
+The installers handle the rest automatically. If you're doing a manual install, you'll need to do the following steps yourself.
+
+Easiest way is to run the sync script, which populates everything for you:
+```bash
+./scripts/sync-models.sh
+```
+
+Or if you'd rather do it by hand, add this to `~/.config/opencode/opencode.json`:
 
 ```json
 {
@@ -36,16 +43,32 @@ Add to `~/.config/opencode/opencode.json`:
       "npm": "@ai-sdk/openai-compatible",
       "options": { "baseURL": "http://127.0.0.1:32124/v1" },
       "models": {
-        "auto": { "name": "Auto" }
+        "auto": { "name": "Auto" },
+        "composer-1": { "name": "Composer 1" },
+        "gpt-5.2": { "name": "GPT-5.2" },
+        "gpt-5.2-high": { "name": "GPT-5.2 High" },
+        "gpt-5.2-codex": { "name": "GPT-5.2 Codex" },
+        "gpt-5.2-codex-low": { "name": "GPT-5.2 Codex Low" },
+        "gpt-5.2-codex-high": { "name": "GPT-5.2 Codex High" },
+        "gpt-5.2-codex-xhigh": { "name": "GPT-5.2 Codex Extra High" },
+        "gpt-5.2-codex-fast": { "name": "GPT-5.2 Codex Fast" },
+        "gpt-5.2-codex-low-fast": { "name": "GPT-5.2 Codex Low Fast" },
+        "gpt-5.2-codex-high-fast": { "name": "GPT-5.2 Codex High Fast" },
+        "gpt-5.2-codex-xhigh-fast": { "name": "GPT-5.2 Codex Extra High Fast" },
+        "gpt-5.1-high": { "name": "GPT-5.1 High" },
+        "gpt-5.1-codex-max": { "name": "GPT-5.1 Codex Max" },
+        "gpt-5.1-codex-max-high": { "name": "GPT-5.1 Codex Max High" },
+        "opus-4.5": { "name": "Claude 4.5 Opus" },
+        "opus-4.5-thinking": { "name": "Claude 4.5 Opus (Thinking)" },
+        "sonnet-4.5": { "name": "Claude 4.5 Sonnet" },
+        "sonnet-4.5-thinking": { "name": "Claude 4.5 Sonnet (Thinking)" },
+        "gemini-3-pro": { "name": "Gemini 3 Pro" },
+        "gemini-3-flash": { "name": "Gemini 3 Flash" },
+        "grok": { "name": "Grok" }
       }
     }
   }
 }
-```
-
-**Sync models** (the installers do this automatically):
-```bash
-./scripts/sync-models.sh
 ```
 
 ## Authentication
@@ -95,17 +118,15 @@ Common models: `auto`, `sonnet-4.5`, `opus-4.5`, `gpt-5.2`, `gemini-3-pro`, `gro
 ## Architecture
 
 ```mermaid
-flowchart TB
-    A[OpenCode] --> B[AI SDK]
-    B --> C[HTTP Proxy :32124]
-    C --> D[cursor-agent]
-    D --> E[Cursor API]
+flowchart LR
+    OC[OpenCode] -->|HTTP| P["cursor-acp plugin\n(:32124)"]
+    P -->|spawn| CA[cursor-agent]
+    CA --> API[Cursor API]
 
-    F[opencode auth login] --> G[OAuth URL]
-    G --> H[Browser]
-    H --> I[~/.cursor/auth.json]
-    I --> D
+    TK["~/.cursor/auth.json"] -.->|read| CA
 ```
+
+Auth token is created once via `opencode auth login` or `cursor-agent login`. After that, `cursor-agent` reads it automatically on each request.
 
 ## Alternatives
 
