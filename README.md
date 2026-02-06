@@ -123,6 +123,11 @@ cursor-agent login
 
 Then open the URL shown in your browser and complete authentication.
 
+Credential file locations:
+
+- macOS: `~/.cursor/cli-config.json` (current) or `~/.cursor/auth.json` (legacy)
+- Linux: `~/.config/cursor/cli-config.json` or `~/.config/cursor/auth.json` (or `$XDG_CONFIG_HOME/cursor/`)
+
 ## Usage
 
 ```bash
@@ -154,7 +159,7 @@ flowchart TB
     SDK["@ai-sdk/openai-compatible\nbaseURL http://localhost:32124/v1"]
     PLUGIN["cursor-acp plugin\nHTTP :32124\nPOST /v1/chat/completions\nGET /v1/models\nSSE streaming"]
     CA["cursor-agent\nstdin → prompt\nstdout → response"]
-    AUTH["~/.cursor/auth.json\nOAuth token"]
+    AUTH["~/.cursor/cli-config.json\n~/.cursor/auth.json\nOAuth token"]
     API["Cursor API"]
 
     OC --> SDK
