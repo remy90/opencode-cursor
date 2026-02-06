@@ -210,26 +210,39 @@ export function verifyCursorAuth(): boolean {
 
 /**
  * Returns all possible auth file paths in priority order.
- * - macOS: ~/.cursor/auth.json (primary), ~/.config/cursor/auth.json (fallback)
- * - Linux: ~/.config/cursor/auth.json (XDG), XDG_CONFIG_HOME/cursor/auth.json, ~/.cursor/auth.json
+ * Checks both auth.json (legacy) and cli-config.json (current cursor-agent format).
+ * - macOS: ~/.cursor/ (primary), ~/.config/cursor/ (fallback)
+ * - Linux: ~/.config/cursor/ (XDG), XDG_CONFIG_HOME/cursor/, ~/.cursor/
  */
 export function getPossibleAuthPaths(): string[] {
   const home = homedir();
   const paths: string[] = [];
   const isDarwin = platform() === "darwin";
 
+  const authFiles = ["cli-config.json", "auth.json"];
+
   if (isDarwin) {
-    paths.push(join(home, ".cursor", "auth.json"));
-    paths.push(join(home, ".config", "cursor", "auth.json"));
+    for (const file of authFiles) {
+      paths.push(join(home, ".cursor", file));
+    }
+    for (const file of authFiles) {
+      paths.push(join(home, ".config", "cursor", file));
+    }
   } else {
-    paths.push(join(home, ".config", "cursor", "auth.json"));
-    
+    for (const file of authFiles) {
+      paths.push(join(home, ".config", "cursor", file));
+    }
+
     const xdgConfig = process.env.XDG_CONFIG_HOME;
     if (xdgConfig && xdgConfig !== join(home, ".config")) {
-      paths.push(join(xdgConfig, "cursor", "auth.json"));
+      for (const file of authFiles) {
+        paths.push(join(xdgConfig, "cursor", file));
+      }
     }
-    
-    paths.push(join(home, ".cursor", "auth.json"));
+
+    for (const file of authFiles) {
+      paths.push(join(home, ".cursor", file));
+    }
   }
 
   return paths;
