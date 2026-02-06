@@ -2,16 +2,21 @@ import { describe, it, expect, beforeEach, afterEach, mock } from "bun:test";
 import { existsSync, writeFileSync, unlinkSync, mkdirSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
-import { pollForAuthFile, verifyCursorAuth, getAuthFilePath } from "../../src/auth";
+import { pollForAuthFile, verifyCursorAuth, getAuthFilePath, getPossibleAuthPaths } from "../../src/auth";
 
 const TEST_TIMEOUT = 10000;
 const TEST_AUTH_DIR = join(homedir(), ".config", "cursor");
 const TEST_AUTH_FILE = join(TEST_AUTH_DIR, "auth.json");
+const TEST_CLI_CONFIG_DIR = join(homedir(), ".cursor");
+const TEST_CLI_CONFIG_FILE = join(TEST_CLI_CONFIG_DIR, "cli-config.json");
 
 describe("Auth Module", () => {
   beforeEach(() => {
     if (existsSync(TEST_AUTH_FILE)) {
       unlinkSync(TEST_AUTH_FILE);
+    }
+    if (existsSync(TEST_CLI_CONFIG_FILE)) {
+      unlinkSync(TEST_CLI_CONFIG_FILE);
     }
   });
 
@@ -19,14 +24,32 @@ describe("Auth Module", () => {
     if (existsSync(TEST_AUTH_FILE)) {
       unlinkSync(TEST_AUTH_FILE);
     }
+    if (existsSync(TEST_CLI_CONFIG_FILE)) {
+      unlinkSync(TEST_CLI_CONFIG_FILE);
+    }
   });
 
   describe("getAuthFilePath", () => {
     it("should return correct auth file path", () => {
       const path = getAuthFilePath();
-      expect(path).toBe(TEST_AUTH_FILE);
       expect(path).toContain("cursor");
-      expect(path).toContain("auth.json");
+      expect(path).toMatch(/(cli-config|auth)\.json/);
+    });
+  });
+
+  describe("getPossibleAuthPaths", () => {
+    it("should include cli-config.json paths", () => {
+      const paths = getPossibleAuthPaths();
+      const hasCliConfig = paths.some((path) => path.includes("cli-config.json"));
+      expect(hasCliConfig).toBe(true);
+    });
+
+    it("should check both auth.json and cli-config.json", () => {
+      const paths = getPossibleAuthPaths();
+      const hasAuthJson = paths.some((path) => path.includes("auth.json"));
+      const hasCliConfig = paths.some((path) => path.includes("cli-config.json"));
+      expect(hasAuthJson).toBe(true);
+      expect(hasCliConfig).toBe(true);
     });
   });
 
@@ -42,6 +65,16 @@ describe("Auth Module", () => {
       }
       writeFileSync(TEST_AUTH_FILE, JSON.stringify({ token: "test" }));
       
+      const result = verifyCursorAuth();
+      expect(result).toBe(true);
+    });
+
+    it("should return true when cli-config.json exists", () => {
+      if (!existsSync(TEST_CLI_CONFIG_DIR)) {
+        mkdirSync(TEST_CLI_CONFIG_DIR, { recursive: true });
+      }
+      writeFileSync(TEST_CLI_CONFIG_FILE, JSON.stringify({ accessToken: "test" }));
+
       const result = verifyCursorAuth();
       expect(result).toBe(true);
     });

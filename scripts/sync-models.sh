@@ -42,8 +42,9 @@ MODEL_COUNT=$(echo "$MODELS_JSON" | jq 'keys | length')
 echo "Found $MODEL_COUNT models"
 
 # Update the config file
-UPDATED=$(jq --argjson models "$MODELS_JSON" '
+UPDATED=$(jq --argjson models "$MODELS_JSON" --arg baseURL "http://127.0.0.1:32124/v1" '
   .provider["cursor-acp"].models = $models
+  | .provider["cursor-acp"].options.baseURL = $baseURL
 ' "$CONFIG_FILE")
 
 echo "$UPDATED" > "$CONFIG_FILE"

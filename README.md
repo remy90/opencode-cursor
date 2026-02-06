@@ -87,6 +87,8 @@ Or if you'd rather do it by hand, add this to `~/.config/opencode/opencode.json`
         "gpt-5.1-high": { "name": "GPT-5.1 High" },
         "gpt-5.1-codex-max": { "name": "GPT-5.1 Codex Max" },
         "gpt-5.1-codex-max-high": { "name": "GPT-5.1 Codex Max High" },
+        "opus-4.6-thinking": { "name": "Claude 4.6 Opus (Thinking)" },
+        "opus-4.6": { "name": "Claude 4.6 Opus" },
         "opus-4.5": { "name": "Claude 4.5 Opus" },
         "opus-4.5-thinking": { "name": "Claude 4.5 Opus (Thinking)" },
         "sonnet-4.5": { "name": "Claude 4.5 Sonnet" },
@@ -123,6 +125,11 @@ cursor-agent login
 
 Then open the URL shown in your browser and complete authentication.
 
+Credential file locations:
+
+- macOS: `~/.cursor/cli-config.json` (current) or `~/.cursor/auth.json` (legacy)
+- Linux: `~/.config/cursor/cli-config.json` or `~/.config/cursor/auth.json` (or `$XDG_CONFIG_HOME/cursor/`)
+
 ## Usage
 
 ```bash
@@ -144,7 +151,7 @@ The proxy also exposes a `/v1/models` endpoint that fetches models in real-time:
 curl http://127.0.0.1:32124/v1/models
 ```
 
-Common models: `auto`, `sonnet-4.5`, `opus-4.5`, `gpt-5.2`, `gemini-3-pro`, `grok`, `composer-1`
+Common models: `auto`, `sonnet-4.5`, `opus-4.6-thinking`, `opus-4.6`, `gpt-5.2`, `gemini-3-pro`, `grok`, `composer-1`
 
 ## Architecture
 
@@ -154,7 +161,7 @@ flowchart TB
     SDK["@ai-sdk/openai-compatible\nbaseURL http://localhost:32124/v1"]
     PLUGIN["cursor-acp plugin\nHTTP :32124\nPOST /v1/chat/completions\nGET /v1/models\nSSE streaming"]
     CA["cursor-agent\nstdin → prompt\nstdout → response"]
-    AUTH["~/.cursor/auth.json\nOAuth token"]
+    AUTH["~/.cursor/cli-config.json\n~/.cursor/auth.json\nOAuth token"]
     API["Cursor API"]
 
     OC --> SDK
