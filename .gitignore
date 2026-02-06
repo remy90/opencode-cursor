@@ -13,6 +13,7 @@ opencode-cursor-*.log
 .opencode/
 .claude/
 .sisyphus/
+.worktrees/
 
 # Development documentation
 BUG_ANALYSIS.md
