@@ -1,0 +1,96 @@
+import type { ToolListResponse } from "@opencode-ai/sdk";
+import { createLogger } from "../utils/logger";
+
+const log = createLogger("tools:discovery");
+
+export interface OpenCodeTool {
+  id: string;
+  name: string; // namespaced for OpenAI (e.g., oc_<id>)
+  description: string;
+  parameters: any; // JSON Schema
+  source: "sdk" | "cli";
+}
+
+export interface DiscoveryOptions {
+  ttlMs?: number;
+  executor?: "sdk" | "cli" | "auto";
+}
+
+export class OpenCodeToolDiscovery {
+  private client: any;
+  private cache: Map<string, OpenCodeTool> = new Map();
+  private cacheExpiry = 0;
+  private ttl: number;
+  private executorPref: "sdk" | "cli" | "auto";
+
+  constructor(client: any, opts: DiscoveryOptions = {}) {
+    this.client = client;
+    this.ttl = opts.ttlMs ?? Number(process.env.CURSOR_ACP_TOOL_CACHE_TTL_MS || 60000);
+    this.executorPref = opts.executor ?? (process.env.CURSOR_ACP_TOOL_EXECUTOR as any) ?? "auto";
+  }
+
+  async listTools(): Promise<OpenCodeTool[]> {
+    const now = Date.now();
+    if (this.cache.size > 0 && now < this.cacheExpiry) {
+      return Array.from(this.cache.values());
+    }
+
+    let tools: OpenCodeTool[] = [];
+
+    // Try SDK first (tool.list)
+    if (this.executorPref !== "cli") {
+      try {
+        const resp: ToolListResponse = await this.client.tool.list();
+        tools = (resp?.data?.tools || []).map((t: any) => this.normalize(t, "sdk"));
+      } catch (err) {
+        log.warn("SDK tool.list failed, will try CLI", { error: String(err) });
+      }
+    }
+
+    // Fallback: CLI opencode tool list --json
+    if (tools.length === 0 && this.executorPref !== "sdk") {
+      try {
+        const { spawnSync } = await import("node:child_process");
+        const res = spawnSync("opencode", ["tool", "list", "--json"], { encoding: "utf-8" });
+        if (res.status === 0 && res.stdout) {
+          const parsed = JSON.parse(res.stdout);
+          tools = (parsed?.data?.tools || []).map((t: any) => this.normalize(t, "cli"));
+        } else {
+          log.warn("CLI tool list failed", { status: res.status, stderr: res.stderr });
+        }
+      } catch (err) {
+        log.error("CLI tool list error", { error: String(err) });
+      }
+    }
+
+    // Deduplicate by id after namespace
+    const map = new Map<string, OpenCodeTool>();
+    for (const t of tools) {
+      map.set(t.name, t);
+    }
+    this.cache = map;
+    this.cacheExpiry = now + this.ttl;
+    return Array.from(this.cache.values());
+  }
+
+  getToolByName(name: string): OpenCodeTool | undefined {
+    return this.cache.get(name);
+  }
+
+  private normalize(t: any, source: "sdk" | "cli"): OpenCodeTool {
+    const id = String(t.id || t.name || "unknown");
+    const name = this.namespace(id);
+    return {
+      id,
+      name,
+      description: String(t.description || "OpenCode tool"),
+      parameters: t.parameters || { type: "object", properties: {} },
+      source,
+    };
+  }
+
+  private namespace(id: string): string {
+    const sanitized = id.replace(/[^a-zA-Z0-9_\-]/g, "_").slice(0, 59); // leave room for prefix
+    return `oc_${sanitized}`;
+  }
+}

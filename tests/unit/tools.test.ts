@@ -1,5 +1,9 @@
 import { describe, it, expect, beforeEach } from "bun:test";
 import { ToolMapper } from "../../src/acp/tools.js";
+import { toOpenAiParameters } from "../../src/tools/schema.js";
+import { OpenCodeToolDiscovery } from "../../src/tools/discovery.js";
+import { OpenCodeToolExecutor } from "../../src/tools/executor.js";
+import { ToolRouter } from "../../src/tools/router.js";
 
 describe("ToolMapper", () => {
   let mapper: ToolMapper;
@@ -590,5 +594,46 @@ describe("ToolMapper", () => {
       expect(updates[0].endTime).toBeGreaterThanOrEqual(beforeTime);
       expect(updates[0].endTime).toBeLessThanOrEqual(afterTime);
     });
+  });
+});
+
+describe("Schema translation", () => {
+  it("forces object and strips unsupported keys", () => {
+    const input = {
+      type: "array",
+      additionalProperties: false,
+      properties: {
+        foo: { type: "string" },
+      },
+      $schema: "http://json-schema.org/draft-07/schema#",
+    };
+    const out = toOpenAiParameters(input);
+    expect(out.type).toBe("object");
+    expect(out.properties.foo.type).toBe("string");
+    expect(out).not.toHaveProperty("additionalProperties");
+    expect(out).not.toHaveProperty("$schema");
+  });
+});
+
+describe("Executor (no SDK invoke available)", () => {
+  it("returns error when no executor available", async () => {
+    const exec = new OpenCodeToolExecutor({}, { mode: "sdk", timeoutMs: 10 });
+    const res = await exec.execute("nonexistent", {});
+    expect(res.status).toBe("error");
+  });
+
+  it("uses SDK invoke when available", async () => {
+    const exec = new OpenCodeToolExecutor(
+      {
+        tool: {
+          invoke: async (id: string, args: any) => ({ ok: true, id, args })
+        }
+      },
+      { mode: "sdk", timeoutMs: 1000 }
+    );
+    const res = await exec.execute("demo", { a: 1 });
+    expect(res.status).toBe("success");
+    expect(res.output).toContain("demo");
+    expect(res.output).toContain("\"a\":1");
   });
 });

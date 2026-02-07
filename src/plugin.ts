@@ -11,6 +11,14 @@ import { parseStreamJsonLine } from "./streaming/parser.js";
 import { extractText, isAssistantText } from "./streaming/types.js";
 import { createLogger } from "./utils/logger";
 import { parseAgentError, formatErrorForUser, stripAnsi } from "./utils/errors";
+import { OpenCodeToolDiscovery } from "./tools/discovery.js";
+import { toOpenAiParameters, describeTool } from "./tools/schema.js";
+import { OpenCodeToolExecutor } from "./tools/executor.js";
+import { ToolRouter } from "./tools/router.js";
+import { OpenCodeToolDiscovery } from "./tools/discovery.js";
+import { toOpenAiParameters, describeTool } from "./tools/schema.js";
+import { OpenCodeToolExecutor } from "./tools/executor.js";
+import { ToolRouter } from "./tools/router.js";
 
 const log = createLogger("plugin");
 
@@ -81,7 +89,7 @@ function formatToolUpdateEvent(update: ToolUpdate): string {
   return `event: tool_update\ndata: ${JSON.stringify(update)}\n\n`;
 }
 
-async function ensureCursorProxyServer(workspaceDirectory: string): Promise<string> {
+async function ensureCursorProxyServer(workspaceDirectory: string, toolRouter?: ToolRouter): Promise<string> {
   const key = getGlobalKey();
   const g = globalThis as any;
 
@@ -93,9 +101,9 @@ async function ensureCursorProxyServer(workspaceDirectory: string): Promise<stri
   // Mark as starting to avoid duplicate starts in-process.
   g[key] = { baseURL: "" };
 
-  const handler = async (req: Request): Promise<Response> => {
-    try {
-      const url = new URL(req.url);
+      const handler = async (req: Request): Promise<Response> => {
+        try {
+          const url = new URL(req.url);
 
       if (url.pathname === "/health") {
         return new Response(JSON.stringify({ ok: true }), {
@@ -150,9 +158,10 @@ async function ensureCursorProxyServer(workspaceDirectory: string): Promise<stri
         });
       }
 
-      const body: any = await req.json().catch(() => ({}));
-      const messages: Array<any> = Array.isArray(body?.messages) ? body.messages : [];
-      const stream = body?.stream === true;
+        const body: any = await req.json().catch(() => ({}));
+        const messages: Array<any> = Array.isArray(body?.messages) ? body.messages : [];
+        const stream = body?.stream === true;
+        const tools = Array.isArray(body?.tools) ? body.tools : [];
 
       // Convert messages to prompt
       const lines: string[] = [];
@@ -274,6 +283,14 @@ async function ensureCursorProxyServer(workspaceDirectory: string): Promise<stri
                   );
                   for (const update of updates) {
                     controller.enqueue(encoder.encode(formatToolUpdateEvent(update)));
+                  }
+
+                  // Handle OpenCode tools
+                  if (toolRouter) {
+                    const toolResult = await toolRouter.handleToolCall(event as any, { id, created, model });
+                    if (toolResult) {
+                      controller.enqueue(encoder.encode(`data: ${JSON.stringify(toolResult)}\n\n`));
+                    }
                   }
                 }
 
@@ -533,6 +550,13 @@ async function ensureCursorProxyServer(workspaceDirectory: string): Promise<stri
               for (const update of updates) {
                 res.write(formatToolUpdateEvent(update));
               }
+
+              if (toolRouter) {
+                const toolResult = await toolRouter.handleToolCall(event as any, { id, created, model });
+                if (toolResult) {
+                  res.write(`data: ${JSON.stringify(toolResult)}\n\n`);
+                }
+              }
             }
 
             for (const sse of converter.handleEvent(event)) {
@@ -555,6 +579,13 @@ async function ensureCursorProxyServer(workspaceDirectory: string): Promise<stri
               );
               for (const update of updates) {
                 res.write(formatToolUpdateEvent(update));
+              }
+
+              if (toolRouter) {
+                const toolResult = await toolRouter.handleToolCall(event as any, { id, created, model });
+                if (toolResult) {
+                  res.write(`data: ${JSON.stringify(toolResult)}\n\n`);
+                }
               }
             }
 
@@ -651,10 +682,33 @@ async function ensureCursorProxyServer(workspaceDirectory: string): Promise<stri
 /**
  * OpenCode plugin for Cursor Agent
  */
-export const CursorPlugin: Plugin = async ({ $, directory }: PluginInput) => {
+export const CursorPlugin: Plugin = async ({ $, directory, client }: PluginInput) => {
   log.info("Plugin initializing", { directory });
   await ensurePluginDirectory();
-  const proxyBaseURL = await ensureCursorProxyServer(directory);
+
+  // Tools (skills) discovery/execution wiring
+  const toolsEnabled = process.env.CURSOR_ACP_ENABLE_OPENCODE_TOOLS !== "false"; // default ON
+  const discovery = toolsEnabled ? new OpenCodeToolDiscovery(client) : null;
+  const executor = toolsEnabled ? new OpenCodeToolExecutor(client) : null;
+  const toolsByName = new Map<string, any>();
+  const router = toolsEnabled && executor ? new ToolRouter({ executor, toolsByName }) : null;
+
+  async function refreshTools() {
+    if (!discovery || !router) return [];
+    const list = await discovery.listTools();
+    toolsByName.clear();
+    list.forEach((t) => toolsByName.set(t.name, t));
+    return list.map((t) => ({
+      type: "function" as const,
+      function: {
+        name: t.name,
+        description: describeTool(t),
+        parameters: toOpenAiParameters(t.parameters),
+      },
+    }));
+  }
+
+  const proxyBaseURL = await ensureCursorProxyServer(directory, router);
   log.info("Proxy server started", { baseURL: proxyBaseURL });
 
   return {
@@ -696,6 +750,15 @@ export const CursorPlugin: Plugin = async ({ $, directory }: PluginInput) => {
       output.options = output.options || {};
       output.options.baseURL = proxyBaseURL || CURSOR_PROXY_DEFAULT_BASE_URL;
       output.options.apiKey = output.options.apiKey || "cursor-agent";
+
+      // Inject OpenCode tools/skills for the model to call (optional)
+      if (toolsEnabled) {
+        try {
+          output.options.tools = await refreshTools();
+        } catch (err) {
+          log.warn("Failed to refresh tools", { error: String(err) });
+        }
+      }
     },
   };
 };
