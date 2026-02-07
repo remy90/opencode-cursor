@@ -3,7 +3,12 @@ import type { Auth } from "@opencode-ai/sdk";
 import { mkdir } from "fs/promises";
 import { homedir } from "os";
 import { join } from "path";
+import { ToolMapper, type ToolUpdate } from "./acp/tools.js";
 import { startCursorOAuth } from "./auth";
+import { LineBuffer } from "./streaming/line-buffer.js";
+import { StreamToSseConverter, formatSseDone } from "./streaming/openai-sse.js";
+import { parseStreamJsonLine } from "./streaming/parser.js";
+import { extractText, isAssistantText } from "./streaming/types.js";
 import { createLogger } from "./utils/logger";
 import { parseAgentError, formatErrorForUser, stripAnsi } from "./utils/errors";
 
@@ -58,6 +63,22 @@ function createChatCompletionChunk(id: string, created: number, model: string, d
       },
     ],
   };
+}
+
+function extractAssistantTextFromStream(output: string): string {
+  const lines = output.split("\n");
+  let content = "";
+  for (const line of lines) {
+    const event = parseStreamJsonLine(line);
+    if (event && isAssistantText(event)) {
+      content = extractText(event);
+    }
+  }
+  return content;
+}
+
+function formatToolUpdateEvent(update: ToolUpdate): string {
+  return `event: tool_update\ndata: ${JSON.stringify(update)}\n\n`;
 }
 
 async function ensureCursorProxyServer(workspaceDirectory: string): Promise<string> {
@@ -170,7 +191,7 @@ async function ensureCursorProxyServer(workspaceDirectory: string): Promise<stri
         "cursor-agent",
         "--print",
         "--output-format",
-        "text",
+        "stream-json",
         "--workspace",
         workspaceDirectory,
         "--model",
@@ -212,7 +233,8 @@ async function ensureCursorProxyServer(workspaceDirectory: string): Promise<stri
           });
         }
 
-        const payload = createChatCompletionResponse(model, stdout || stderr);
+        const assistantText = extractAssistantTextFromStream(stdout);
+        const payload = createChatCompletionResponse(model, assistantText || stdout || stderr);
         return new Response(JSON.stringify(payload), {
           status: 200,
           headers: { "Content-Type": "application/json" },
@@ -223,23 +245,61 @@ async function ensureCursorProxyServer(workspaceDirectory: string): Promise<stri
       const encoder = new TextEncoder();
       const id = `cursor-acp-${Date.now()}`;
       const created = Math.floor(Date.now() / 1000);
+      const toolMapper = new ToolMapper();
+      const toolSessionId = id;
 
       const sse = new ReadableStream({
         async start(controller) {
           let closed = false;
           try {
-            const decoder = new TextDecoder();
             const reader = (child.stdout as ReadableStream<Uint8Array>).getReader();
+            const converter = new StreamToSseConverter(model, { id, created });
+            const lineBuffer = new LineBuffer();
 
             while (true) {
               const { value, done } = await reader.read();
               if (done) break;
               if (!value || value.length === 0) continue;
-              const text = decoder.decode(value, { stream: true });
-              if (!text) continue;
 
-              const chunk = createChatCompletionChunk(id, created, model, text, false);
-              controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+              for (const line of lineBuffer.push(value)) {
+                const event = parseStreamJsonLine(line);
+                if (!event) {
+                  continue;
+                }
+
+                if (event.type === "tool_call") {
+                  const updates = await toolMapper.mapCursorEventToAcp(
+                    event,
+                    event.session_id ?? toolSessionId,
+                  );
+                  for (const update of updates) {
+                    controller.enqueue(encoder.encode(formatToolUpdateEvent(update)));
+                  }
+                }
+
+                for (const sse of converter.handleEvent(event)) {
+                  controller.enqueue(encoder.encode(sse));
+                }
+              }
+            }
+
+            for (const line of lineBuffer.flush()) {
+              const event = parseStreamJsonLine(line);
+              if (!event) {
+                continue;
+              }
+              if (event.type === "tool_call") {
+                const updates = await toolMapper.mapCursorEventToAcp(
+                  event,
+                  event.session_id ?? toolSessionId,
+                );
+                for (const update of updates) {
+                  controller.enqueue(encoder.encode(formatToolUpdateEvent(update)));
+                }
+              }
+              for (const sse of converter.handleEvent(event)) {
+                controller.enqueue(encoder.encode(sse));
+              }
             }
 
             if (child.exitCode !== 0) {
@@ -249,13 +309,13 @@ async function ensureCursorProxyServer(workspaceDirectory: string): Promise<stri
               log.error("cursor-cli streaming failed", { type: parsed.type });
               const errChunk = createChatCompletionChunk(id, created, model, msg, true);
               controller.enqueue(encoder.encode(`data: ${JSON.stringify(errChunk)}\n\n`));
-              controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+              controller.enqueue(encoder.encode(formatSseDone()));
               return;
             }
 
             const doneChunk = createChatCompletionChunk(id, created, model, "", true);
             controller.enqueue(encoder.encode(`data: ${JSON.stringify(doneChunk)}\n\n`));
-            controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+            controller.enqueue(encoder.encode(formatSseDone()));
           } finally {
             closed = true;
             controller.close();
@@ -377,7 +437,7 @@ async function ensureCursorProxyServer(workspaceDirectory: string): Promise<stri
         "cursor-agent",
         "--print",
         "--output-format",
-        "text", // Always use text format (stream-json outputs OpenCode protocol)
+        "stream-json",
         "--workspace",
         workspaceDirectory,
         "--model",
@@ -397,9 +457,10 @@ async function ensureCursorProxyServer(workspaceDirectory: string): Promise<stri
         child.stdout.on("data", (chunk) => stdoutChunks.push(chunk));
         child.stderr.on("data", (chunk) => stderrChunks.push(chunk));
 
-        child.on("close", (code) => {
+        child.on("close", async (code) => {
           const stdout = Buffer.concat(stdoutChunks).toString().trim();
           const stderr = Buffer.concat(stderrChunks).toString().trim();
+          const assistantText = extractAssistantTextFromStream(stdout);
 
           if (code !== 0 && stderr.length > 0) {
             const parsed = parseAgentError(stderr);
@@ -424,19 +485,19 @@ async function ensureCursorProxyServer(workspaceDirectory: string): Promise<stri
             return;
           }
 
-          const response = {
-            id: `cursor-acp-${Date.now()}`,
-            object: "chat.completion",
-            created: Math.floor(Date.now() / 1000),
-            model,
-            choices: [
-              {
-                index: 0,
-                message: { role: "assistant", content: stdout || stderr },
-                finish_reason: "stop",
-              },
-            ],
-          };
+            const response = {
+              id: `cursor-acp-${Date.now()}`,
+              object: "chat.completion",
+              created: Math.floor(Date.now() / 1000),
+              model,
+              choices: [
+                {
+                  index: 0,
+                  message: { role: "assistant", content: assistantText || stdout || stderr },
+                  finish_reason: "stop",
+                },
+              ],
+            };
 
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify(response));
@@ -452,25 +513,56 @@ async function ensureCursorProxyServer(workspaceDirectory: string): Promise<stri
         const id = `cursor-acp-${Date.now()}`;
         const created = Math.floor(Date.now() / 1000);
 
-        child.stdout.on("data", (chunk) => {
-          const text = chunk.toString();
-          const chunkData = {
-            id,
-            object: "chat.completion.chunk",
-            created,
-            model,
-            choices: [
-              {
-                index: 0,
-                delta: { content: text },
-                finish_reason: null,
-              },
-            ],
-          };
-          res.write(`data: ${JSON.stringify(chunkData)}\n\n`);
+        const converter = new StreamToSseConverter(model, { id, created });
+        const lineBuffer = new LineBuffer();
+        const toolMapper = new ToolMapper();
+        const toolSessionId = id;
+
+        child.stdout.on("data", async (chunk) => {
+          for (const line of lineBuffer.push(chunk)) {
+            const event = parseStreamJsonLine(line);
+            if (!event) {
+              continue;
+            }
+
+            if (event.type === "tool_call") {
+              const updates = await toolMapper.mapCursorEventToAcp(
+                event,
+                event.session_id ?? toolSessionId,
+              );
+              for (const update of updates) {
+                res.write(formatToolUpdateEvent(update));
+              }
+            }
+
+            for (const sse of converter.handleEvent(event)) {
+              res.write(sse);
+            }
+          }
         });
 
-        child.on("close", (code) => {
+        child.on("close", async (code) => {
+          for (const line of lineBuffer.flush()) {
+            const event = parseStreamJsonLine(line);
+            if (!event) {
+              continue;
+            }
+
+            if (event.type === "tool_call") {
+              const updates = await toolMapper.mapCursorEventToAcp(
+                event,
+                event.session_id ?? toolSessionId,
+              );
+              for (const update of updates) {
+                res.write(formatToolUpdateEvent(update));
+              }
+            }
+
+            for (const sse of converter.handleEvent(event)) {
+              res.write(sse);
+            }
+          }
+
           if (code !== 0) {
             child.stderr.on("data", (chunk) => {
               const errChunk = {
@@ -504,7 +596,7 @@ async function ensureCursorProxyServer(workspaceDirectory: string): Promise<stri
             ],
           };
           res.write(`data: ${JSON.stringify(doneChunk)}\n\n`);
-          res.write("data: [DONE]\n\n");
+          res.write(formatSseDone());
           res.end();
         });
       }

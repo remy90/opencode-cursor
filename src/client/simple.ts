@@ -1,4 +1,11 @@
 import { spawn } from 'child_process';
+import { LineBuffer } from '../streaming/line-buffer.js';
+import { parseStreamJsonLine } from '../streaming/parser.js';
+import {
+  extractText,
+  isAssistantText,
+  type StreamJsonEvent,
+} from '../streaming/types.js';
 import { createLogger } from '../utils/logger.js';
 
 export interface CursorClientConfig {
@@ -35,7 +42,7 @@ export class SimpleCursorClient {
     model?: string;
     mode?: 'default' | 'plan' | 'ask';
     resumeId?: string;
-  } = {}): AsyncGenerator<string, void, unknown> {
+  } = {}): AsyncGenerator<StreamJsonEvent, void, unknown> {
     // Input validation
     if (!prompt || typeof prompt !== 'string') {
       throw new Error('Invalid prompt: must be a non-empty string');
@@ -51,7 +58,7 @@ export class SimpleCursorClient {
     const args = [
       '--print',
       '--output-format',
-      'text', // Use text format (stream-json outputs OpenCode protocol)
+      'stream-json',
       '--stream-partial-output',
       '--model',
       model
@@ -79,19 +86,8 @@ export class SimpleCursorClient {
       child.stdin.end();
     }
 
-    const lines: string[] = [];
-    let buffer = '';
     let processError: Error | null = null;
-
-    child.stdout.on('data', (data) => {
-      buffer += data.toString();
-      const newLines = buffer.split('\n');
-      buffer = newLines.pop() || '';
-
-      for (const line of newLines) {
-        if (line.trim()) lines.push(line.trim());
-      }
-    });
+    const lineBuffer = new LineBuffer();
 
     // Add stderr handling
     child.stderr.on('data', (data) => {
@@ -109,7 +105,6 @@ export class SimpleCursorClient {
     const streamEnded = new Promise<number | null>((resolve) => {
       child.on('close', (code) => {
         clearTimeout(timeoutId);
-        if (buffer.trim()) lines.push(buffer.trim());
         if (code !== 0 && !processError) {
           this.log.error('cursor-agent exited with non-zero code', { code });
           processError = new Error(`cursor-agent exited with code ${code}`);
@@ -125,22 +120,30 @@ export class SimpleCursorClient {
       });
     });
 
-    // Wait for process to complete before yielding
-    const exitCode = await streamEnded;
+    for await (const chunk of child.stdout) {
+      for (const line of lineBuffer.push(chunk)) {
+        const event = parseStreamJsonLine(line);
+        if (event) {
+          yield event;
+        } else {
+          this.log.warn('Invalid JSON from cursor-agent', { line: line.substring(0, 100) });
+        }
+      }
+    }
+
+    for (const line of lineBuffer.flush()) {
+      const event = parseStreamJsonLine(line);
+      if (event) {
+        yield event;
+      } else {
+        this.log.warn('Invalid JSON from cursor-agent', { line: line.substring(0, 100) });
+      }
+    }
+
+    await streamEnded;
 
     if (processError) {
       throw processError;
-    }
-
-    // Validate and yield lines
-    for (const line of lines) {
-      try {
-        JSON.parse(line); // Validate JSON
-        yield line;
-      } catch (parseError) {
-        this.log.warn('Invalid JSON from cursor-agent', { line: line.substring(0, 100) });
-        // Skip invalid lines
-      }
     }
   }
 
@@ -165,7 +168,7 @@ export class SimpleCursorClient {
     const args = [
       '--print',
       '--output-format',
-      'text', // Use text format (stream-json outputs OpenCode protocol)
+      'stream-json',
       '--stream-partial-output',
       '--model',
       model
@@ -224,9 +227,9 @@ export class SimpleCursorClient {
           
           for (const line of lines) {
             if (line.trim()) {
-              const event = JSON.parse(line);
-              if (event.type === 'assistant' && event.message?.content?.[0]?.text) {
-                content = event.message.content[0].text;
+              const event = parseStreamJsonLine(line);
+              if (event && isAssistantText(event)) {
+                content = extractText(event);
               }
             }
           }

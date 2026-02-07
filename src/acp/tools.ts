@@ -15,7 +15,7 @@ interface CursorEvent {
   type: string;
   call_id?: string;
   tool_call_id?: string;
-  subtype?: 'started' | 'completed' | 'failed';
+  subtype?: string;
   tool_call?: {
     [key: string]: {
       args?: Record<string, unknown>;

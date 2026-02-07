@@ -2,12 +2,16 @@ import { SimpleCursorClient } from "./client/simple.js";
 import { createProxyServer } from "./proxy/server.js";
 import { parseOpenAIRequest } from "./proxy/handler.js";
 import { createChatCompletionResponse, createChatCompletionChunk } from "./proxy/formatter.js";
+import { StreamToAiSdkParts } from "./streaming/ai-sdk-parts.js";
+import { ToolMapper, type ToolUpdate } from "./acp/tools.js";
 
 export interface ProviderOptions {
   baseURL?: string;
   apiKey?: string;
   mode?: 'direct' | 'proxy';
   proxyConfig?: { port?: number; host?: string };
+  toolUpdateCallback?: (updates: ToolUpdate[]) => void;
+  sessionId?: string;
 }
 
 /**
@@ -15,6 +19,7 @@ export interface ProviderOptions {
  * Exports a factory function for @ai-sdk/provider compatibility
  */
 export function createCursorProvider(options: ProviderOptions = {}) {
+  const providerOptions = options;
   const mode = options.mode || 'direct';
 
   if (mode === 'proxy') {
@@ -214,23 +219,28 @@ export function createCursorProvider(options: ProviderOptions = {}) {
           }
 
           const stream = client.executePromptStream(prompt, { model });
+          const converter = new StreamToAiSdkParts();
+          const toolMapper = providerOptions.toolUpdateCallback ? new ToolMapper() : null;
+          const toolSessionId = providerOptions.sessionId
+            ?? `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
           // Create a proper ReadableStream that OpenCode can use with pipeThrough
           const readableStream = new ReadableStream({
             async start(controller) {
               try {
-                for await (const line of stream) {
-                  try {
-                    const evt = JSON.parse(line);
-                    if (evt.type === "assistant" && evt.message?.content?.[0]?.text) {
-                      const chunk = {
-                        type: "text-delta",
-                        textDelta: evt.message.content[0].text
-                      };
-                      controller.enqueue(chunk);
+                for await (const event of stream) {
+                  if (toolMapper && event.type === "tool_call") {
+                    const updates = await toolMapper.mapCursorEventToAcp(
+                      event,
+                      event.session_id ?? toolSessionId,
+                    );
+                    if (updates.length > 0) {
+                      providerOptions.toolUpdateCallback?.(updates);
                     }
-                  } catch {
-                    // Skip invalid JSON
+                  }
+                  const parts = converter.handleEvent(event);
+                  for (const part of parts) {
+                    controller.enqueue(part);
                   }
                 }
                 controller.enqueue({ type: "text-delta", textDelta: "" });
