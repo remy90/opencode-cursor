@@ -5,7 +5,9 @@
   <img src="https://img.shields.io/badge/macOS-000000?style=for-the-badge&logo=apple&logoColor=white" alt="macOS" />
 </p>
 
-Use your Cursor Pro subscription in [OpenCode](https://github.com/anomalyco/opencode). HTTP proxy to cursor-agent with OAuth support.
+No prompt limits. No broken streams. Full thinking + tool support. Your Cursor subscription, properly integrated.
+
+Use Cursor in [OpenCode](https://github.com/anomalyco/opencode) via an HTTP proxy to cursor-agent with OAuth support.
 
 ## Installation
 

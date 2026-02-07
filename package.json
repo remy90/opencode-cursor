@@ -1,7 +1,7 @@
 {
   "name": "@nomadcxx/opencode-cursor",
   "version": "2.1.0",
-  "description": "OpenCode plugin for Cursor Agent via stdin (fixes E2BIG errors)",
+  "description": "No prompt limits. No broken streams. Full thinking + tool support. Your Cursor subscription, properly integrated.",
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
