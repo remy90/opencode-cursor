@@ -693,6 +693,7 @@ export const CursorPlugin: Plugin = async ({ $, directory, client }: PluginInput
   const toolsByName = new Map<string, any>();
   const router = toolsEnabled && executor ? new ToolRouter({ executor, toolsByName }) : null;
   let lastToolNames: string[] = [];
+  let lastToolMap: Array<{ id: string; name: string }> = [];
 
   async function refreshTools() {
     if (!discovery || !router) return [];
@@ -706,7 +707,7 @@ export const CursorPlugin: Plugin = async ({ $, directory, client }: PluginInput
         type: "function" as const,
         function: {
           name,
-          description: describeTool(t),
+          description: `${describeTool(t)} (skill id: ${t.id})`,
           parameters: toOpenAiParameters(t.parameters),
         },
       });
@@ -723,6 +724,7 @@ export const CursorPlugin: Plugin = async ({ $, directory, client }: PluginInput
     }
 
     lastToolNames = toolEntries.map((e) => e.function.name);
+    lastToolMap = list.map((t) => ({ id: t.id, name: t.name }));
     return toolEntries;
   }
 
@@ -782,9 +784,10 @@ export const CursorPlugin: Plugin = async ({ $, directory, client }: PluginInput
     async "experimental.chat.system.transform"(input: any, output: { system: string[] }) {
       if (!toolsEnabled || lastToolNames.length === 0) return;
       const names = lastToolNames.join(", ");
+      const mapping = lastToolMap.map((m) => `${m.id} -> ${m.name}`).join("; ");
       output.system = output.system || [];
       output.system.push(
-        `Available OpenCode tools (use via tool calls): ${names}. Aliases include oc_skill_* and oc_superskill_* when applicable.`
+        `Available OpenCode tools (use via tool calls): ${names}. Original skill ids mapped as: ${mapping}. Aliases include oc_skill_* and oc_superskill_* when applicable.`
       );
     },
   };
