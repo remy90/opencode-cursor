@@ -1,4 +1,5 @@
 import type { Plugin, PluginInput } from "@opencode-ai/plugin";
+import { tool } from "@opencode-ai/plugin";
 import type { Auth } from "@opencode-ai/sdk";
 import { mkdir } from "fs/promises";
 import { homedir } from "os";
@@ -685,6 +686,96 @@ async function ensureCursorProxyServer(workspaceDirectory: string, toolRouter?: 
 }
 
 /**
+ * Convert JSON Schema parameters to Zod schemas for plugin tool hook
+ */
+function jsonSchemaToZod(jsonSchema: any): any {
+  const z = tool.schema;
+  const properties = jsonSchema.properties || {};
+  const required = jsonSchema.required || [];
+
+  const zodShape: any = {};
+
+  for (const [key, prop] of Object.entries(properties)) {
+    const p = prop as any;
+    let zodType: any;
+
+    switch (p.type) {
+      case "string":
+        zodType = z.string();
+        if (p.description) {
+          zodType = zodType.describe(p.description);
+        }
+        break;
+      case "number":
+        zodType = z.number();
+        if (p.description) {
+          zodType = zodType.describe(p.description);
+        }
+        break;
+      case "boolean":
+        zodType = z.boolean();
+        if (p.description) {
+          zodType = zodType.describe(p.description);
+        }
+        break;
+      case "object":
+        zodType = z.record(z.any());
+        if (p.description) {
+          zodType = zodType.describe(p.description);
+        }
+        break;
+      case "array":
+        zodType = z.array(z.any());
+        if (p.description) {
+          zodType = zodType.describe(p.description);
+        }
+        break;
+      default:
+        zodType = z.any();
+        break;
+    }
+
+    // Make optional if not in required array
+    if (!required.includes(key)) {
+      zodType = zodType.optional();
+    }
+
+    zodShape[key] = zodType;
+  }
+
+  return zodShape;
+}
+
+/**
+ * Build tool hook entries from local registry
+ */
+function buildToolHookEntries(registry: CoreRegistry): Record<string, any> {
+  const entries: Record<string, any> = {};
+  const tools = registry.list();
+
+  for (const t of tools) {
+    const handler = registry.getHandler(t.name);
+    if (!handler) continue;
+
+    const zodArgs = jsonSchemaToZod(t.parameters);
+
+    entries[t.name] = tool({
+      description: t.description,
+      args: zodArgs,
+      async execute(args: any, context: any) {
+        try {
+          return await handler(args);
+        } catch (error: any) {
+          return `Error: ${error.message || String(error)}`;
+        }
+      },
+    });
+  }
+
+  return entries;
+}
+
+/**
  * OpenCode plugin for Cursor Agent
  */
 export const CursorPlugin: Plugin = async ({ $, directory, client, serverUrl }: PluginInput) => {
@@ -774,7 +865,11 @@ export const CursorPlugin: Plugin = async ({ $, directory, client, serverUrl }: 
   const proxyBaseURL = await ensureCursorProxyServer(directory, router);
   log.info("Proxy server started", { baseURL: proxyBaseURL });
 
+  // Build tool hook entries from local registry
+  const toolHookEntries = buildToolHookEntries(localRegistry);
+
   return {
+    tool: toolHookEntries,
     auth: {
       provider: CURSOR_PROVIDER_ID,
       async loader(_getAuth: () => Promise<Auth>) {
