@@ -74,7 +74,7 @@ export class SimpleCursorClient {
       args.push('--resume', resumeId);
     }
 
-    this.log.info('Executing prompt stream', { promptLength: prompt.length, mode, model });
+    this.log.debug('Executing prompt stream', { promptLength: prompt.length, mode, model });
 
     const child = spawn(this.config.cursorAgentPath, args, {
       cwd,
@@ -184,7 +184,7 @@ export class SimpleCursorClient {
       args.push('--resume', resumeId);
     }
 
-    this.log.info('Executing prompt', { promptLength: prompt.length, mode, model });
+    this.log.debug('Executing prompt', { promptLength: prompt.length, mode, model });
 
     return new Promise((resolve, reject) => {
       const child = spawn(this.config.cursorAgentPath, args, {

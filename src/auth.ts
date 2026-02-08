@@ -34,7 +34,7 @@ export async function pollForAuthFile(
       
       for (const authPath of possiblePaths) {
         if (existsSync(authPath)) {
-          log.info("Auth file detected", { path: authPath });
+          log.debug("Auth file detected", { path: authPath });
           resolve(true);
           return;
         }
@@ -47,7 +47,7 @@ export async function pollForAuthFile(
       });
 
       if (elapsed >= timeoutMs) {
-        log.warn("Auth file polling timed out");
+        log.debug("Auth file polling timed out");
         resolve(false);
         return;
       }

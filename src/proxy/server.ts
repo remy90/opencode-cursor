@@ -1,6 +1,9 @@
 import { execSync } from "node:child_process";
 import { platform } from "node:os";
 import type { ProxyConfig, ProxyServer } from "./types.js";
+import { createLogger } from "../utils/logger.js";
+
+const log = createLogger("proxy-server");
 
 const DEFAULT_PORT = 32124;
 const PORT_RANGE_SIZE = 256;
@@ -43,11 +46,11 @@ function getUsedPortsInRange(minPort: number, maxPort: number): Set<number> {
     } else {
       // Windows and other platforms: no port detection available
       // Will fall back to probe-based discovery via tryStart failures
-      console.warn(`[proxy-server] Port detection not supported on ${os}. Using probe-based discovery.`);
+      log.debug(`Port detection not supported on ${os}. Using probe-based discovery.`);
     }
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
-    console.warn(`[proxy-server] Port detection failed: ${msg}. Using probe-based discovery.`);
+    log.debug(`Port detection failed: ${msg}. Using probe-based discovery.`);
   }
   return used;
 }
@@ -109,7 +112,7 @@ export function createProxyServer(config: ProxyConfig): ProxyServer {
                           err.message.includes("address already in use") ||
                           err.message.includes("port is already in use");
       if (!isPortInUse) {
-        console.error(`[proxy-server] Unexpected error starting on port ${port}: ${err.message}`);
+        log.debug(`Unexpected error starting on port ${port}: ${err.message}`);
       }
       return { success: false, error: err };
     }
@@ -127,9 +130,8 @@ export function createProxyServer(config: ProxyConfig): ProxyServer {
         if (result.success) {
           port = requestedPort;
         } else {
-          console.warn(
-            `[proxy-server] Requested port ${requestedPort} unavailable: ${result.error?.message ?? "unknown"}. ` +
-            `Falling back to automatic port selection.`
+          log.debug(
+            `Requested port ${requestedPort} unavailable: ${result.error?.message ?? "unknown"}. Falling back to automatic port selection.`
           );
           port = await findAvailablePort();
           const fallbackResult = tryStart(port);
@@ -139,7 +141,7 @@ export function createProxyServer(config: ProxyConfig): ProxyServer {
               `and fallback port ${port} (${fallbackResult.error?.message ?? "unknown"})`
             );
           }
-          console.warn(`[proxy-server] Server started on fallback port ${port} instead of requested port ${requestedPort}`);
+          log.debug(`Server started on fallback port ${port} instead of requested port ${requestedPort}`);
         }
       } else {
         port = await findAvailablePort();

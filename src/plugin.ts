@@ -832,7 +832,7 @@ function buildToolHookEntries(registry: CoreRegistry): Record<string, any> {
  * OpenCode plugin for Cursor Agent
  */
 export const CursorPlugin: Plugin = async ({ $, directory, client, serverUrl }: PluginInput) => {
-  log.info("Plugin initializing", { directory });
+  log.debug("Plugin initializing", { directory });
   await ensurePluginDirectory();
 
   // Tools (skills) discovery/execution wiring
@@ -924,7 +924,7 @@ export const CursorPlugin: Plugin = async ({ $, directory, client, serverUrl }: 
   }
 
   const proxyBaseURL = await ensureCursorProxyServer(directory, router);
-  log.info("Proxy server started", { baseURL: proxyBaseURL });
+  log.debug("Proxy server started", { baseURL: proxyBaseURL });
 
   // Build tool hook entries from local registry
   const toolHookEntries = buildToolHookEntries(localRegistry);
