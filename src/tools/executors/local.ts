@@ -1,5 +1,8 @@
 import type { IToolExecutor, ExecutionResult } from "../core/types.js";
 import type { ToolRegistry } from "../core/registry.js";
+import { createLogger } from "../../utils/logger.js";
+
+const log = createLogger("tools:executor:local");
 
 export class LocalExecutor implements IToolExecutor {
   constructor(private registry: ToolRegistry) {}
@@ -15,8 +18,8 @@ export class LocalExecutor implements IToolExecutor {
       const out = await handler(args);
       return { status: "success", output: out };
     } catch (err: any) {
+      log.warn("Local tool execution failed", { toolId, error: String(err?.message || err) });
       return { status: "error", error: String(err?.message || err) };
     }
   }
 }
-

@@ -1,24 +1,30 @@
 import type { IToolExecutor, ExecutionResult } from "../core/types.js";
 import { createLogger } from "../../utils/logger.js";
 
-const log = createLogger("tools:executor:sdk");
+const log = createLogger("tools:executor:mcp");
 
-export class SdkExecutor implements IToolExecutor {
+export class McpExecutor implements IToolExecutor {
+  private toolIds = new Set<string>();
+
   constructor(private client: any, private timeoutMs: number) {}
 
-  canExecute(): boolean {
-    return Boolean(this.client?.tool?.invoke);
+  setToolIds(ids: Iterable<string>): void {
+    this.toolIds = new Set(ids);
+  }
+
+  canExecute(toolId: string): boolean {
+    return Boolean(this.client?.mcp?.tool?.invoke) && this.toolIds.has(toolId);
   }
 
   async execute(toolId: string, args: Record<string, unknown>): Promise<ExecutionResult> {
-    if (!this.canExecute()) return { status: "error", error: "SDK invoke unavailable" };
+    if (!this.canExecute(toolId)) return { status: "error", error: "MCP invoke unavailable" };
     try {
-      const p = this.client.tool.invoke(toolId, args);
+      const p = this.client.mcp.tool.invoke(toolId, args);
       const res = await this.runWithTimeout(p);
       const out = typeof res === "string" ? res : JSON.stringify(res);
       return { status: "success", output: out };
     } catch (err: any) {
-      log.warn("SDK tool execution failed", { toolId, error: String(err?.message || err) });
+      log.warn("MCP tool execution failed", { toolId, error: String(err?.message || err) });
       return { status: "error", error: String(err?.message || err) };
     }
   }

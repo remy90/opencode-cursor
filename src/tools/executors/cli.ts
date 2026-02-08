@@ -1,5 +1,8 @@
 import stripAnsi from "strip-ansi";
 import type { IToolExecutor, ExecutionResult } from "../core/types.js";
+import { createLogger } from "../../utils/logger.js";
+
+const log = createLogger("tools:executor:cli");
 
 export class CliExecutor implements IToolExecutor {
   constructor(private timeoutMs: number) {}
@@ -40,6 +43,7 @@ export class CliExecutor implements IToolExecutor {
       }
       return { status: "error", error: stripAnsi(err || out || `Exit code ${code}`) };
     } catch (err: any) {
+      log.warn("CLI tool execution failed", { toolId, error: String(err?.message || err) });
       return { status: "error", error: String(err?.message || err) };
     }
   }
@@ -52,4 +56,3 @@ export class CliExecutor implements IToolExecutor {
     ]);
   }
 }
-
