@@ -15,6 +15,7 @@ import { parseAgentError, formatErrorForUser, stripAnsi } from "./utils/errors";
 import { buildPromptFromMessages } from "./proxy/prompt-builder.js";
 import {
   extractAllowedToolNames,
+  extractOpenAiToolCall,
   type OpenAiToolCall,
 } from "./proxy/tool-loop.js";
 import { OpenCodeToolDiscovery } from "./tools/discovery.js";
@@ -33,10 +34,11 @@ import type { IToolExecutor } from "./tools/core/types.js";
 import {
   createProviderBoundary,
   parseProviderBoundaryMode,
+  type ProviderBoundary,
   type ToolLoopMode,
   type ToolOptionResolution,
 } from "./provider/boundary.js";
-import { handleToolLoopEvent } from "./provider/runtime-interception.js";
+import { handleToolLoopEventWithFallback } from "./provider/runtime-interception.js";
 
 const log = createLogger("plugin");
 
@@ -79,7 +81,13 @@ const {
   mode: PROVIDER_BOUNDARY_MODE,
   valid: PROVIDER_BOUNDARY_MODE_VALID,
 } = parseProviderBoundaryMode(PROVIDER_BOUNDARY_MODE_RAW);
-const PROVIDER_BOUNDARY = createProviderBoundary(PROVIDER_BOUNDARY_MODE, CURSOR_PROVIDER_ID);
+const LEGACY_PROVIDER_BOUNDARY = createProviderBoundary("legacy", CURSOR_PROVIDER_ID);
+const PROVIDER_BOUNDARY =
+  PROVIDER_BOUNDARY_MODE === "legacy"
+    ? LEGACY_PROVIDER_BOUNDARY
+    : createProviderBoundary(PROVIDER_BOUNDARY_MODE, CURSOR_PROVIDER_ID);
+const ENABLE_PROVIDER_BOUNDARY_AUTOFALLBACK =
+  process.env.CURSOR_ACP_PROVIDER_BOUNDARY_AUTOFALLBACK === "true";
 const {
   proxyExecuteToolCalls: PROXY_EXECUTE_TOOL_CALLS,
   suppressConverterToolEvents: SUPPRESS_CONVERTER_TOOL_EVENTS,
@@ -179,10 +187,81 @@ function formatToolUpdateEvent(update: ToolUpdate): string {
   return `event: tool_update\ndata: ${JSON.stringify(update)}\n\n`;
 }
 
+function toErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return String(error);
+}
+
+function createBoundaryRuntimeContext(scope: string) {
+  let activeBoundary = PROVIDER_BOUNDARY;
+  let fallbackActive = false;
+
+  const canAutoFallback = ENABLE_PROVIDER_BOUNDARY_AUTOFALLBACK && PROVIDER_BOUNDARY.mode === "v1";
+
+  const activateLegacyFallback = (operation: string, error: unknown): boolean => {
+    if (!canAutoFallback || activeBoundary.mode === "legacy") {
+      return false;
+    }
+
+    activeBoundary = LEGACY_PROVIDER_BOUNDARY;
+    const details = {
+      scope,
+      operation,
+      error: toErrorMessage(error),
+    };
+    if (!fallbackActive) {
+      log.warn("Provider boundary v1 failed; switching to legacy for this request", details);
+    } else {
+      log.debug("Provider boundary fallback already active", details);
+    }
+    fallbackActive = true;
+    return true;
+  };
+
+  return {
+    getBoundary(): ProviderBoundary {
+      return activeBoundary;
+    },
+
+    run<T>(operation: string, fn: (boundary: ProviderBoundary) => T): T {
+      try {
+        return fn(activeBoundary);
+      } catch (error) {
+        if (!activateLegacyFallback(operation, error)) {
+          throw error;
+        }
+        return fn(activeBoundary);
+      }
+    },
+
+    async runAsync<T>(operation: string, fn: (boundary: ProviderBoundary) => Promise<T>): Promise<T> {
+      try {
+        return await fn(activeBoundary);
+      } catch (error) {
+        if (!activateLegacyFallback(operation, error)) {
+          throw error;
+        }
+        return fn(activeBoundary);
+      }
+    },
+
+    activateLegacyFallback(operation: string, error: unknown) {
+      activateLegacyFallback(operation, error);
+    },
+
+    isFallbackActive(): boolean {
+      return fallbackActive;
+    },
+  };
+}
+
 function findFirstAllowedToolCallInOutput(
   output: string,
   allowedToolNames: Set<string>,
   toolLoopMode: ToolLoopMode,
+  boundary: ProviderBoundary,
 ): OpenAiToolCall | null {
   if (allowedToolNames.size === 0 || !output) {
     return null;
@@ -194,11 +273,16 @@ function findFirstAllowedToolCallInOutput(
       continue;
     }
 
-    const toolCall = PROVIDER_BOUNDARY.maybeExtractToolCall(
-      event as any,
-      allowedToolNames,
-      toolLoopMode,
-    );
+    const toolCall =
+      boundary.mode === "legacy"
+        ? toolLoopMode === "opencode"
+          ? extractOpenAiToolCall(event as any, allowedToolNames)
+          : null
+        : boundary.maybeExtractToolCall(
+            event as any,
+            allowedToolNames,
+            toolLoopMode,
+          );
     if (toolCall) {
       return toolCall;
     }
@@ -281,9 +365,12 @@ async function ensureCursorProxyServer(workspaceDirectory: string, toolRouter?: 
         const stream = body?.stream === true;
         const tools = Array.isArray(body?.tools) ? body.tools : [];
         const allowedToolNames = extractAllowedToolNames(tools);
+        const boundaryContext = createBoundaryRuntimeContext("bun-handler");
 
       const prompt = buildPromptFromMessages(messages, tools);
-      const model = PROVIDER_BOUNDARY.normalizeRuntimeModel(body?.model);
+      const model = boundaryContext.run("normalizeRuntimeModel", (boundary) =>
+        boundary.normalizeRuntimeModel(body?.model),
+      );
 
       const bunAny = globalThis as any;
       if (!bunAny.Bun?.spawn) {
@@ -328,10 +415,15 @@ async function ensureCursorProxyServer(workspaceDirectory: string, toolRouter?: 
 
         const stdout = (stdoutText || "").trim();
         const stderr = (stderrText || "").trim();
-        const toolCall = findFirstAllowedToolCallInOutput(
-          stdout,
-          allowedToolNames,
-          TOOL_LOOP_MODE,
+        const toolCall = boundaryContext.run(
+          "findFirstAllowedToolCallInOutput",
+          (boundary) =>
+            findFirstAllowedToolCallInOutput(
+              stdout,
+              allowedToolNames,
+              TOOL_LOOP_MODE,
+              boundary,
+            ),
         );
         if (toolCall) {
           log.debug("Intercepted OpenCode tool call (non-stream)", {
@@ -343,7 +435,10 @@ async function ensureCursorProxyServer(workspaceDirectory: string, toolRouter?: 
             created: Math.floor(Date.now() / 1000),
             model,
           };
-          const payload = PROVIDER_BOUNDARY.createNonStreamToolCallResponse(meta, toolCall);
+          const payload = boundaryContext.run(
+            "createNonStreamToolCallResponse",
+            (boundary) => boundary.createNonStreamToolCallResponse(meta, toolCall),
+          );
           return new Response(JSON.stringify(payload), {
             status: 200,
             headers: { "Content-Type": "application/json" },
@@ -395,10 +490,12 @@ async function ensureCursorProxyServer(workspaceDirectory: string, toolRouter?: 
                 name: toolCall.function.name,
                 callId: toolCall.id,
               });
-              for (const chunk of PROVIDER_BOUNDARY.createStreamToolCallChunks(
-                { id, created, model },
-                toolCall,
-              )) {
+              const streamChunks = boundaryContext.run(
+                "createStreamToolCallChunks",
+                (boundary) =>
+                  boundary.createStreamToolCallChunks({ id, created, model }, toolCall),
+              );
+              for (const chunk of streamChunks) {
                 controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
               }
               controller.enqueue(encoder.encode(formatSseDone()));
@@ -424,9 +521,11 @@ async function ensureCursorProxyServer(workspaceDirectory: string, toolRouter?: 
                 }
 
                 if (event.type === "tool_call") {
-                  const result = await handleToolLoopEvent({
+                  const result = await handleToolLoopEventWithFallback({
                     event: event as any,
-                    boundary: PROVIDER_BOUNDARY,
+                    boundary: boundaryContext.getBoundary(),
+                    boundaryMode: boundaryContext.getBoundary().mode,
+                    autoFallbackToLegacy: ENABLE_PROVIDER_BOUNDARY_AUTOFALLBACK,
                     toolLoopMode: TOOL_LOOP_MODE,
                     allowedToolNames,
                     toolMapper,
@@ -444,6 +543,9 @@ async function ensureCursorProxyServer(workspaceDirectory: string, toolRouter?: 
                     },
                     onInterceptedToolCall: (toolCall) => {
                       emitToolCallAndTerminate(toolCall);
+                    },
+                    onFallbackToLegacy: (error) => {
+                      boundaryContext.activateLegacyFallback("handleToolLoopEvent", error);
                     },
                   });
                   if (result.intercepted) {
@@ -470,9 +572,11 @@ async function ensureCursorProxyServer(workspaceDirectory: string, toolRouter?: 
                 continue;
               }
               if (event.type === "tool_call") {
-                const result = await handleToolLoopEvent({
+                const result = await handleToolLoopEventWithFallback({
                   event: event as any,
-                  boundary: PROVIDER_BOUNDARY,
+                  boundary: boundaryContext.getBoundary(),
+                  boundaryMode: boundaryContext.getBoundary().mode,
+                  autoFallbackToLegacy: ENABLE_PROVIDER_BOUNDARY_AUTOFALLBACK,
                   toolLoopMode: TOOL_LOOP_MODE,
                   allowedToolNames,
                   toolMapper,
@@ -490,6 +594,9 @@ async function ensureCursorProxyServer(workspaceDirectory: string, toolRouter?: 
                   },
                   onInterceptedToolCall: (toolCall) => {
                     emitToolCallAndTerminate(toolCall);
+                  },
+                  onFallbackToLegacy: (error) => {
+                    boundaryContext.activateLegacyFallback("handleToolLoopEvent.flush", error);
                   },
                 });
                 if (result.intercepted) {
@@ -615,9 +722,12 @@ async function ensureCursorProxyServer(workspaceDirectory: string, toolRouter?: 
       const stream = bodyData?.stream === true;
       const tools = Array.isArray(bodyData?.tools) ? bodyData.tools : [];
       const allowedToolNames = extractAllowedToolNames(tools);
+      const boundaryContext = createBoundaryRuntimeContext("node-handler");
 
       const prompt = buildPromptFromMessages(messages, tools);
-      const model = PROVIDER_BOUNDARY.normalizeRuntimeModel(bodyData?.model);
+      const model = boundaryContext.run("normalizeRuntimeModel", (boundary) =>
+        boundary.normalizeRuntimeModel(bodyData?.model),
+      );
 
       const cmd = [
         "cursor-agent",
@@ -650,10 +760,15 @@ async function ensureCursorProxyServer(workspaceDirectory: string, toolRouter?: 
         child.on("close", async (code) => {
           const stdout = Buffer.concat(stdoutChunks).toString().trim();
           const stderr = Buffer.concat(stderrChunks).toString().trim();
-          const toolCall = findFirstAllowedToolCallInOutput(
-            stdout,
-            allowedToolNames,
-            TOOL_LOOP_MODE,
+          const toolCall = boundaryContext.run(
+            "findFirstAllowedToolCallInOutput",
+            (boundary) =>
+              findFirstAllowedToolCallInOutput(
+                stdout,
+                allowedToolNames,
+                TOOL_LOOP_MODE,
+                boundary,
+              ),
           );
           if (toolCall) {
             log.debug("Intercepted OpenCode tool call (non-stream)", {
@@ -665,7 +780,10 @@ async function ensureCursorProxyServer(workspaceDirectory: string, toolRouter?: 
               created: Math.floor(Date.now() / 1000),
               model,
             };
-            const payload = PROVIDER_BOUNDARY.createNonStreamToolCallResponse(meta, toolCall);
+            const payload = boundaryContext.run(
+              "createNonStreamToolCallResponse",
+              (boundary) => boundary.createNonStreamToolCallResponse(meta, toolCall),
+            );
             res.writeHead(200, { "Content-Type": "application/json" });
             res.end(JSON.stringify(payload));
             return;
@@ -717,10 +835,12 @@ async function ensureCursorProxyServer(workspaceDirectory: string, toolRouter?: 
             name: toolCall.function.name,
             callId: toolCall.id,
           });
-          for (const chunk of PROVIDER_BOUNDARY.createStreamToolCallChunks(
-            { id, created, model },
-            toolCall,
-          )) {
+          const streamChunks = boundaryContext.run(
+            "createStreamToolCallChunks",
+            (boundary) =>
+              boundary.createStreamToolCallChunks({ id, created, model }, toolCall),
+          );
+          for (const chunk of streamChunks) {
             res.write(`data: ${JSON.stringify(chunk)}\n\n`);
           }
           res.write(formatSseDone());
@@ -747,9 +867,11 @@ async function ensureCursorProxyServer(workspaceDirectory: string, toolRouter?: 
             }
 
             if (event.type === "tool_call") {
-              const result = await handleToolLoopEvent({
+              const result = await handleToolLoopEventWithFallback({
                 event: event as any,
-                boundary: PROVIDER_BOUNDARY,
+                boundary: boundaryContext.getBoundary(),
+                boundaryMode: boundaryContext.getBoundary().mode,
+                autoFallbackToLegacy: ENABLE_PROVIDER_BOUNDARY_AUTOFALLBACK,
                 toolLoopMode: TOOL_LOOP_MODE,
                 allowedToolNames,
                 toolMapper,
@@ -767,6 +889,9 @@ async function ensureCursorProxyServer(workspaceDirectory: string, toolRouter?: 
                 },
                 onInterceptedToolCall: (toolCall) => {
                   emitToolCallAndTerminate(toolCall);
+                },
+                onFallbackToLegacy: (error) => {
+                  boundaryContext.activateLegacyFallback("handleToolLoopEvent", error);
                 },
               });
               if (result.intercepted) {
@@ -800,9 +925,11 @@ async function ensureCursorProxyServer(workspaceDirectory: string, toolRouter?: 
             }
 
             if (event.type === "tool_call") {
-              const result = await handleToolLoopEvent({
+              const result = await handleToolLoopEventWithFallback({
                 event: event as any,
-                boundary: PROVIDER_BOUNDARY,
+                boundary: boundaryContext.getBoundary(),
+                boundaryMode: boundaryContext.getBoundary().mode,
+                autoFallbackToLegacy: ENABLE_PROVIDER_BOUNDARY_AUTOFALLBACK,
                 toolLoopMode: TOOL_LOOP_MODE,
                 allowedToolNames,
                 toolMapper,
@@ -820,6 +947,9 @@ async function ensureCursorProxyServer(workspaceDirectory: string, toolRouter?: 
                 },
                 onInterceptedToolCall: (toolCall) => {
                   emitToolCallAndTerminate(toolCall);
+                },
+                onFallbackToLegacy: (error) => {
+                  boundaryContext.activateLegacyFallback("handleToolLoopEvent.close", error);
                 },
               });
               if (result.intercepted) {
@@ -1036,10 +1166,14 @@ export const CursorPlugin: Plugin = async ({ $, directory, client, serverUrl }: 
       value: PROVIDER_BOUNDARY_MODE_RAW,
     });
   }
+  if (ENABLE_PROVIDER_BOUNDARY_AUTOFALLBACK && PROVIDER_BOUNDARY.mode !== "v1") {
+    log.debug("Provider boundary auto-fallback is enabled but inactive unless mode=v1");
+  }
   log.info("Tool loop mode configured", {
     mode: TOOL_LOOP_MODE,
     providerBoundary: PROVIDER_BOUNDARY.mode,
     proxyExecToolCalls: PROXY_EXECUTE_TOOL_CALLS,
+    providerBoundaryAutoFallback: ENABLE_PROVIDER_BOUNDARY_AUTOFALLBACK,
   });
   await ensurePluginDirectory();
 
@@ -1194,15 +1328,22 @@ export const CursorPlugin: Plugin = async ({ $, directory, client, serverUrl }: 
     },
 
     async "chat.params"(input: any, output: any) {
-      if (!PROVIDER_BOUNDARY.matchesProvider(input.model)) {
+      const boundaryContext = createBoundaryRuntimeContext("chat.params");
+
+      const providerMatch = boundaryContext.run("matchesProvider", (boundary) =>
+        boundary.matchesProvider(input.model),
+      );
+      if (!providerMatch) {
         return;
       }
 
-      PROVIDER_BOUNDARY.applyChatParamDefaults(
-        output,
-        proxyBaseURL,
-        CURSOR_PROXY_DEFAULT_BASE_URL,
-        "cursor-agent",
+      boundaryContext.run("applyChatParamDefaults", (boundary) =>
+        boundary.applyChatParamDefaults(
+          output,
+          proxyBaseURL,
+          CURSOR_PROXY_DEFAULT_BASE_URL,
+          "cursor-agent",
+        ),
       );
 
       // Tool definitions handling:
@@ -1215,7 +1356,9 @@ export const CursorPlugin: Plugin = async ({ $, directory, client, serverUrl }: 
             TOOL_LOOP_MODE === "proxy-exec"
             || (TOOL_LOOP_MODE === "opencode" && existingTools == null);
           const refreshedTools = shouldRefresh ? await refreshTools() : [];
-          const resolved = resolveChatParamTools(TOOL_LOOP_MODE, existingTools, refreshedTools);
+          const resolved = boundaryContext.run("resolveChatParamTools", (boundary) =>
+            boundary.resolveChatParamTools(TOOL_LOOP_MODE, existingTools, refreshedTools),
+          );
 
           if (resolved.action === "override" || resolved.action === "fallback") {
             output.options.tools = resolved.tools;
