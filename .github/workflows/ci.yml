@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - run: bun install
+
+      - run: bun run build
+
+      - name: Run tests
+        run: |
+          bun test \
+            tests/tools/defaults.test.ts \
+            tests/tools/executor-chain.test.ts \
+            tests/tools/sdk-executor.test.ts \
+            tests/tools/mcp-executor.test.ts \
+            tests/tools/skills.test.ts \
+            tests/tools/registry.test.ts \
+            tests/integration/comprehensive.test.ts \
+            tests/integration/tools-router.integration.test.ts \
+            tests/unit/proxy/prompt-builder.test.ts \
+            tests/unit/plugin.test.ts \
+            tests/unit/plugin-tools-hook.test.ts \
+            tests/unit/plugin-config.test.ts \
+            tests/unit/auth.test.ts \
+            tests/unit/streaming/line-buffer.test.ts \
+            tests/unit/streaming/parser.test.ts \
+            tests/unit/streaming/types.test.ts \
+            tests/unit/streaming/delta-tracker.test.ts \
+            tests/competitive/edge.test.ts
