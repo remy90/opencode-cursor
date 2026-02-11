@@ -130,6 +130,91 @@ describe("proxy/tool-loop", () => {
     expect(call?.function.name).toBe("todowrite");
   });
 
+  it("maps executeCommand alias to allowed bash tool name", () => {
+    const event: any = {
+      type: "tool_call",
+      call_id: "call_bash_alias",
+      name: "executeCommand",
+      tool_call: {
+        executeCommand: {
+          args: { command: "pwd" },
+        },
+      },
+    };
+
+    const call = extractOpenAiToolCall(event, new Set(["bash"]));
+    expect(call).not.toBeNull();
+    expect(call?.function.name).toBe("bash");
+  });
+
+  it("maps shell alias to allowed bash tool name", () => {
+    const event: any = {
+      type: "tool_call",
+      call_id: "call_shell_alias",
+      name: "shell",
+      tool_call: {
+        shell: {
+          args: { cmd: "pwd" },
+        },
+      },
+    };
+
+    const call = extractOpenAiToolCall(event, new Set(["bash"]));
+    expect(call).not.toBeNull();
+    expect(call?.function.name).toBe("bash");
+  });
+
+  it("maps createDirectory alias to allowed mkdir tool name", () => {
+    const event: any = {
+      type: "tool_call",
+      call_id: "call_mkdir_alias",
+      name: "createDirectory",
+      tool_call: {
+        createDirectory: {
+          args: { path: "tmp/dir" },
+        },
+      },
+    };
+
+    const call = extractOpenAiToolCall(event, new Set(["mkdir"]));
+    expect(call).not.toBeNull();
+    expect(call?.function.name).toBe("mkdir");
+  });
+
+  it("maps deleteFile alias to allowed rm tool name", () => {
+    const event: any = {
+      type: "tool_call",
+      call_id: "call_rm_alias",
+      name: "deleteFile",
+      tool_call: {
+        deleteFile: {
+          args: { path: "tmp/file.txt" },
+        },
+      },
+    };
+
+    const call = extractOpenAiToolCall(event, new Set(["rm"]));
+    expect(call).not.toBeNull();
+    expect(call?.function.name).toBe("rm");
+  });
+
+  it("maps findFiles alias to allowed glob tool name", () => {
+    const event: any = {
+      type: "tool_call",
+      call_id: "call_glob_alias",
+      name: "findFiles",
+      tool_call: {
+        findFiles: {
+          args: { pattern: "**/*.ts" },
+        },
+      },
+    };
+
+    const call = extractOpenAiToolCall(event, new Set(["glob"]));
+    expect(call).not.toBeNull();
+    expect(call?.function.name).toBe("glob");
+  });
+
   it("builds valid non-stream tool call response", () => {
     const response = createToolCallCompletionResponse(
       { id: "resp-1", created: 123, model: "cursor-acp/auto" },

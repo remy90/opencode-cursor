@@ -9,6 +9,16 @@ type ToolLoopErrorClass =
   | "success"
   | "unknown";
 
+const UNKNOWN_AS_SUCCESS_TOOLS = new Set([
+  "bash",
+  "read",
+  "grep",
+  "ls",
+  "glob",
+  "stat",
+  "webfetch",
+]);
+
 export interface ToolLoopGuardDecision {
   fingerprint: string;
   repeatCount: number;
@@ -57,10 +67,13 @@ export function createToolLoopGuard(
 
   return {
     evaluate(toolCall) {
-      const errorClass = byCallId.get(toolCall.id)
-        ?? latestByToolName.get(toolCall.function.name)
-        ?? latest
-        ?? "unknown";
+      const errorClass = normalizeErrorClassForTool(
+        toolCall.function.name,
+        byCallId.get(toolCall.id)
+          ?? latestByToolName.get(toolCall.function.name)
+          ?? latest
+          ?? "unknown",
+      );
       const argShape = deriveArgumentShape(toolCall.function.arguments);
       if (errorClass === "success") {
         // For success paths, only track identical value payloads to avoid blocking
@@ -185,12 +198,15 @@ function indexToolLoopHistory(messages: Array<unknown>): {
   for (const call of assistantCalls) {
     const ec = byCallId.get(call.id);
     if (ec !== undefined) {
-      latestByToolName.set(call.name, ec);
+      latestByToolName.set(call.name, normalizeErrorClassForTool(call.name, ec));
     }
   }
 
   for (const call of assistantCalls) {
-    const errorClass = byCallId.get(call.id) ?? latestByToolName.get(call.name) ?? latest ?? "unknown";
+    const errorClass = normalizeErrorClassForTool(
+      call.name,
+      byCallId.get(call.id) ?? latestByToolName.get(call.name) ?? latest ?? "unknown",
+    );
     if (errorClass === "success") {
       incrementCount(
         initialCounts,
@@ -438,6 +454,19 @@ function hashString(value: string): string {
     hash = Math.imul(hash, 0x01000193);
   }
   return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+function normalizeErrorClassForTool(
+  toolName: string,
+  errorClass: ToolLoopErrorClass,
+): ToolLoopErrorClass {
+  if (
+    errorClass === "unknown"
+    && UNKNOWN_AS_SUCCESS_TOOLS.has(toolName.toLowerCase())
+  ) {
+    return "success";
+  }
+  return errorClass;
 }
 
 function toLowerText(content: unknown): string {

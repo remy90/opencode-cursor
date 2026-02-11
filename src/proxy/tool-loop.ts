@@ -19,6 +19,49 @@ export interface ToolLoopMeta {
 }
 
 const TOOL_NAME_ALIASES = new Map<string, string>([
+  // bash aliases
+  ["runcommand", "bash"],
+  ["executecommand", "bash"],
+  ["runterminalcommand", "bash"],
+  ["terminalcommand", "bash"],
+  ["shellcommand", "bash"],
+  ["shell", "bash"],
+  ["terminal", "bash"],
+  ["bashcommand", "bash"],
+  ["runbash", "bash"],
+  ["executebash", "bash"],
+  // glob aliases
+  ["findfiles", "glob"],
+  ["searchfiles", "glob"],
+  ["globfiles", "glob"],
+  ["fileglob", "glob"],
+  ["matchfiles", "glob"],
+  // mkdir aliases
+  ["createdirectory", "mkdir"],
+  ["makedirectory", "mkdir"],
+  ["mkdirp", "mkdir"],
+  ["createdir", "mkdir"],
+  ["makefolder", "mkdir"],
+  // rm aliases
+  ["delete", "rm"],
+  ["deletefile", "rm"],
+  ["deletepath", "rm"],
+  ["deletedirectory", "rm"],
+  ["remove", "rm"],
+  ["removefile", "rm"],
+  ["removepath", "rm"],
+  ["unlink", "rm"],
+  ["rmdir", "rm"],
+  // stat aliases
+  ["getfileinfo", "stat"],
+  ["fileinfo", "stat"],
+  ["filestat", "stat"],
+  ["pathinfo", "stat"],
+  // ls aliases
+  ["listdirectory", "ls"],
+  ["listfiles", "ls"],
+  ["listdir", "ls"],
+  ["readdir", "ls"],
   // todo write aliases
   ["updatetodos", "todowrite"],
   ["updatetodostoolcall", "todowrite"],
@@ -62,6 +105,12 @@ export function extractOpenAiToolCall(
 
   const resolvedName = resolveAllowedToolName(name, allowedToolNames);
   if (!resolvedName) {
+    log.debug("Tool call name not allowed; skipping interception", {
+      name,
+      normalized: normalizeAliasKey(name),
+      allowedToolCount: allowedToolNames.size,
+      aliasTarget: TOOL_NAME_ALIASES.get(normalizeAliasKey(name)) ?? null,
+    });
     return null;
   }
 

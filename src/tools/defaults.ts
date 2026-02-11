@@ -34,11 +34,14 @@ export function registerDefaultTools(registry: ToolRegistry): void {
     const execAsync = promisify(exec);
 
     try {
-      const command = args.command as string;
-      const timeout = args.timeout as number | undefined;
-      const cwd = args.cwd as string | undefined;
+      const command = resolveBashCommand(args);
+      if (!command) {
+        throw new Error("bash: missing required argument 'command'");
+      }
+      const timeout = resolveTimeout(args.timeout);
+      const cwd = resolveWorkingDirectory(args);
       const { stdout, stderr } = await execAsync(command, {
-        timeout: timeout || 30000,
+        timeout: timeout ?? 30000,
         cwd: cwd
       });
       return stdout || stderr || "Command executed successfully";
@@ -317,19 +320,41 @@ export function registerDefaultTools(registry: ToolRegistry): void {
     const { promisify } = await import("util");
     const execFileAsync = promisify(execFile);
 
-    const pattern = args.pattern as string;
-    const path = args.path as string | undefined;
+    const pattern = resolveGlobPattern(args);
+    if (!pattern) {
+      throw new Error("glob: missing required argument 'pattern'");
+    }
+    const path = resolvePathArg(args, "glob");
     const cwd = path || ".";
+    const normalizedPattern = pattern.replace(/\\/g, "/");
+    const isPathPattern = normalizedPattern.includes("/");
+    const findArgs = [cwd, "-type", "f"];
+    if (isPathPattern) {
+      if (cwd === "." || cwd === "./") {
+        const dotPattern = normalizedPattern.startsWith("./")
+          ? normalizedPattern
+          : `./${normalizedPattern}`;
+        findArgs.push("(", "-path", normalizedPattern, "-o", "-path", dotPattern, ")");
+      } else {
+        findArgs.push("-path", normalizedPattern);
+      }
+    } else {
+      findArgs.push("-name", normalizedPattern);
+    }
 
     try {
-      const { stdout } = await execFileAsync(
-        "find", [cwd, "-type", "f", "-name", pattern],
-        { timeout: 30000 }
-      );
+      const { stdout } = await execFileAsync("find", findArgs, { timeout: 30000 });
       // Limit output to 50 lines (replaces piped `| head -50`)
       const lines = (stdout || "").split("\n").filter(Boolean);
       return lines.slice(0, 50).join("\n") || "No files found";
     } catch (error: any) {
+      const stdout = typeof error?.stdout === "string" ? error.stdout : "";
+      const stderr = typeof error?.stderr === "string" ? error.stderr : "";
+      // Permission-denied and "no results" scenarios from find should not be fatal.
+      if (error?.code === 1 || stderr.includes("Permission denied")) {
+        const lines = stdout.split("\n").filter(Boolean);
+        return lines.slice(0, 50).join("\n") || "No files found";
+      }
       throw error;
     }
   });
@@ -353,7 +378,11 @@ export function registerDefaultTools(registry: ToolRegistry): void {
   }, async (args) => {
     const { mkdir } = await import("fs/promises");
     const { resolve } = await import("path");
-    const target = resolve(String(args.path));
+    const rawPath = resolvePathArg(args, "mkdir");
+    if (!rawPath) {
+      throw new Error("mkdir: missing required argument 'path'");
+    }
+    const target = resolve(rawPath);
     await mkdir(target, { recursive: true });
     return `Created directory: ${target}`;
   });
@@ -381,12 +410,17 @@ export function registerDefaultTools(registry: ToolRegistry): void {
   }, async (args) => {
     const { rm, stat } = await import("fs/promises");
     const { resolve } = await import("path");
-    const target = resolve(String(args.path));
+    const rawPath = resolvePathArg(args, "rm");
+    if (!rawPath) {
+      throw new Error("rm: missing required argument 'path'");
+    }
+    const target = resolve(rawPath);
+    const force = resolveBoolean(args.force, false);
     const info = await stat(target);
-    if (info.isDirectory() && !args.force) {
+    if (info.isDirectory() && !force) {
       throw new Error("Directory not empty. Use force: true to delete recursively.");
     }
-    await rm(target, { recursive: !!args.force });
+    await rm(target, { recursive: force });
     return `Deleted: ${target}`;
   });
 
@@ -409,7 +443,11 @@ export function registerDefaultTools(registry: ToolRegistry): void {
   }, async (args) => {
     const { stat } = await import("fs/promises");
     const { resolve } = await import("path");
-    const target = resolve(String(args.path));
+    const rawPath = resolvePathArg(args, "stat");
+    if (!rawPath) {
+      throw new Error("stat: missing required argument 'path'");
+    }
+    const target = resolve(rawPath);
     const info = await stat(target);
     return JSON.stringify({
       path: target,
@@ -447,6 +485,113 @@ function resolveEditArguments(args: Record<string, unknown>): {
     old_string: oldString,
     new_string: newString,
   };
+}
+
+function resolveBashCommand(args: Record<string, unknown>): string | null {
+  const direct = coerceToString(args.command ?? args.cmd ?? args.script ?? args.input);
+  if (direct !== null && direct.trim().length > 0) {
+    return direct;
+  }
+
+  if (Array.isArray(args.command)) {
+    const parts = args.command
+      .map((part) => coerceToString(part))
+      .filter((part): part is string => typeof part === "string" && part.trim().length > 0);
+    if (parts.length > 0) {
+      return parts.join(" ");
+    }
+  }
+
+  const commandObject = args.command;
+  if (typeof commandObject === "object" && commandObject !== null && !Array.isArray(commandObject)) {
+    const record = commandObject as Record<string, unknown>;
+    const base = coerceToString(record.command ?? record.cmd);
+    if (base !== null && base.trim().length > 0) {
+      if (Array.isArray(record.args)) {
+        const argParts = record.args
+          .map((entry) => coerceToString(entry))
+          .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0);
+        return argParts.length > 0 ? `${base} ${argParts.join(" ")}` : base;
+      }
+      return base;
+    }
+  }
+
+  return null;
+}
+
+function resolveWorkingDirectory(args: Record<string, unknown>): string | undefined {
+  const cwd = coerceToString(args.cwd ?? args.workdir ?? args.path);
+  if (cwd !== null && cwd.trim().length > 0) {
+    return cwd;
+  }
+  return undefined;
+}
+
+function resolveGlobPattern(args: Record<string, unknown>): string | null {
+  const direct = coerceToString(
+    args.pattern
+      ?? args.globPattern
+      ?? args.filePattern
+      ?? args.searchPattern
+      ?? args.includePattern,
+  );
+  if (direct !== null && direct.trim().length > 0) {
+    return direct;
+  }
+  return null;
+}
+
+function resolvePathArg(args: Record<string, unknown>, toolName: string): string | null {
+  const value = coerceToString(
+    args.path
+      ?? args.filePath
+      ?? args.targetPath
+      ?? args.directory
+      ?? args.dir
+      ?? args.folder
+      ?? args.targetDirectory
+      ?? args.targetFile,
+  );
+  if (value !== null && value.trim().length > 0) {
+    return value;
+  }
+  if (toolName === "glob") {
+    return ".";
+  }
+  return null;
+}
+
+function resolveTimeout(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const parsed = Number(value.trim());
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
+  return undefined;
+}
+
+function resolveBoolean(value: unknown, defaultValue: boolean): boolean {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "number") {
+    return value !== 0;
+  }
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "true" || normalized === "1" || normalized === "yes") {
+      return true;
+    }
+    if (normalized === "false" || normalized === "0" || normalized === "no") {
+      return false;
+    }
+  }
+  return defaultValue;
 }
 
 function coerceToString(value: unknown): string | null {

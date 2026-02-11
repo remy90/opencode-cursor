@@ -147,6 +147,76 @@ describe("tool schema compatibility", () => {
     expect(result.validation.ok).toBe(true);
   });
 
+  it("normalizes bash aliases command/cwd", () => {
+    const result = applyToolSchemaCompat(
+      {
+        id: "b1",
+        type: "function",
+        function: {
+          name: "bash",
+          arguments: JSON.stringify({
+            cmd: "pwd",
+            workdir: "/tmp",
+          }),
+        },
+      },
+      new Map([
+        [
+          "bash",
+          {
+            type: "object",
+            properties: {
+              command: { type: "string" },
+              cwd: { type: "string" },
+            },
+            required: ["command"],
+            additionalProperties: false,
+          },
+        ],
+      ]),
+    );
+
+    expect(result.normalizedArgs.command).toBe("pwd");
+    expect(result.normalizedArgs.cwd).toBe("/tmp");
+    expect(result.normalizedArgs.cmd).toBeUndefined();
+    expect(result.normalizedArgs.workdir).toBeUndefined();
+    expect(result.validation.ok).toBe(true);
+  });
+
+  it("normalizes rm recursive string alias into boolean force", () => {
+    const result = applyToolSchemaCompat(
+      {
+        id: "r1",
+        type: "function",
+        function: {
+          name: "rm",
+          arguments: JSON.stringify({
+            targetPath: "/tmp/to-delete",
+            recursive: "true",
+          }),
+        },
+      },
+      new Map([
+        [
+          "rm",
+          {
+            type: "object",
+            properties: {
+              path: { type: "string" },
+              force: { type: "boolean" },
+            },
+            required: ["path"],
+            additionalProperties: false,
+          },
+        ],
+      ]),
+    );
+
+    expect(result.normalizedArgs.path).toBe("/tmp/to-delete");
+    expect(result.normalizedArgs.force).toBe(true);
+    expect(result.validation.ok).toBe(true);
+  });
+
   it("keeps canonical keys when aliases collide", () => {
     const result = applyToolSchemaCompat(
       {

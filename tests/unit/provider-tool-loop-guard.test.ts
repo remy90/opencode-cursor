@@ -213,6 +213,40 @@ describe("tool loop guard", () => {
     expect(second.triggered).toBe(true);
   });
 
+  it("treats unknown bash output as success for loop tracking", () => {
+    const guard = createToolLoopGuard(
+      [
+        {
+          role: "tool",
+          tool_call_id: "bash-1",
+          content: "bash-ok",
+        },
+      ],
+      1,
+    );
+
+    const first = guard.evaluate({
+      id: "bash-1",
+      type: "function",
+      function: {
+        name: "bash",
+        arguments: JSON.stringify({ command: "printf bash-ok" }),
+      },
+    });
+    const second = guard.evaluate({
+      id: "bash-1",
+      type: "function",
+      function: {
+        name: "bash",
+        arguments: JSON.stringify({ command: "printf bash-ok" }),
+      },
+    });
+
+    expect(first.errorClass).toBe("success");
+    expect(first.triggered).toBe(false);
+    expect(second.triggered).toBe(true);
+  });
+
   it("seeds success-loop history across requests for identical successful calls", () => {
     const guard = createToolLoopGuard(
       [

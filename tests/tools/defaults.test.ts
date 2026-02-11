@@ -71,6 +71,20 @@ describe("Default Tools", () => {
     expect(result.output!.length).toBeGreaterThan(0);
   });
 
+  it("should execute bash tool with cmd/workdir aliases", async () => {
+    const registry = new ToolRegistry();
+    registerDefaultTools(registry);
+    const executor = new LocalExecutor(registry);
+
+    const result = await executeWithChain([executor], "bash", {
+      cmd: "pwd",
+      workdir: "/tmp",
+    });
+
+    expect(result.status).toBe("success");
+    expect(result.output?.trim()).toBe("/tmp");
+  });
+
   it("should execute read tool", async () => {
     const registry = new ToolRegistry();
     registerDefaultTools(registry);
@@ -409,5 +423,26 @@ describe("Default Tools", () => {
 
     expect(result.status).toBe("success");
     expect(result.output).toContain(".ts");
+  });
+
+  it("should execute glob tool for nested slash patterns", async () => {
+    const registry = new ToolRegistry();
+    registerDefaultTools(registry);
+    const executor = new LocalExecutor(registry);
+    const fs = await import("fs");
+    const base = `/tmp/test-glob-nested-${Date.now()}`;
+    const nested = `${base}/a/b`;
+    fs.mkdirSync(nested, { recursive: true });
+    fs.writeFileSync(`${nested}/match.txt`, "x", "utf-8");
+
+    const result = await executeWithChain([executor], "glob", {
+      path: base,
+      pattern: "**/*.txt",
+    });
+
+    expect(result.status).toBe("success");
+    expect(result.output).toContain("match.txt");
+
+    fs.rmSync(base, { recursive: true, force: true });
   });
 });

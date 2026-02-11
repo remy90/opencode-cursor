@@ -8,16 +8,28 @@ const ARG_KEY_ALIASES = new Map<string, string>([
   ["filepath", "path"],
   ["filename", "path"],
   ["file", "path"],
+  ["targetpath", "path"],
+  ["directorypath", "path"],
+  ["dir", "path"],
+  ["folder", "path"],
   ["directory", "path"],
   ["targetdirectory", "path"],
   ["targetfile", "path"],
   ["globpattern", "pattern"],
+  ["filepattern", "pattern"],
   ["searchpattern", "pattern"],
   ["includepattern", "include"],
+  ["workingdirectory", "cwd"],
+  ["workdir", "cwd"],
+  ["currentdirectory", "cwd"],
   ["cmd", "command"],
+  ["script", "command"],
+  ["shellcommand", "command"],
+  ["terminalcommand", "command"],
   ["contents", "content"],
   ["text", "content"],
   ["streamcontent", "content"],
+  ["recursive", "force"],
   ["oldstring", "old_string"],
   ["newstring", "new_string"],
 ]);
@@ -141,6 +153,35 @@ function resolveCanonicalArgKey(rawKey: string): string | null {
 
 function normalizeToolSpecificArgs(toolName: string, args: JsonRecord): JsonRecord {
   const normalizedToolName = toolName.toLowerCase();
+  if (normalizedToolName === "bash") {
+    const normalized: JsonRecord = { ...args };
+    const normalizedCommand = normalizeBashCommand(normalized.command);
+    if (typeof normalizedCommand === "string" && normalizedCommand.trim().length > 0) {
+      normalized.command = normalizedCommand;
+    }
+    if (
+      normalized.cwd === undefined
+      && typeof normalized.path === "string"
+      && normalized.path.trim().length > 0
+    ) {
+      normalized.cwd = normalized.path;
+    }
+    return normalized;
+  }
+
+  if (normalizedToolName === "rm") {
+    const normalized: JsonRecord = { ...args };
+    if (typeof normalized.force === "string") {
+      const lowered = normalized.force.trim().toLowerCase();
+      if (lowered === "true" || lowered === "1" || lowered === "yes") {
+        normalized.force = true;
+      } else if (lowered === "false" || lowered === "0" || lowered === "no") {
+        normalized.force = false;
+      }
+    }
+    return normalized;
+  }
+
   if (normalizedToolName === "todowrite") {
     if (!Array.isArray(args.todos)) {
       return args;
@@ -199,6 +240,33 @@ function normalizeToolSpecificArgs(toolName: string, args: JsonRecord): JsonReco
   }
 
   return repaired;
+}
+
+function normalizeBashCommand(value: unknown): string | null {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    const parts = value
+      .map((entry) => (typeof entry === "string" ? entry : coerceToString(entry)))
+      .filter((entry): entry is string => typeof entry === "string" && entry.length > 0);
+    return parts.length > 0 ? parts.join(" ") : null;
+  }
+  if (isRecord(value)) {
+    const command = typeof value.command === "string" ? value.command : null;
+    const args = Array.isArray(value.args)
+      ? value.args
+          .map((entry) => (typeof entry === "string" ? entry : coerceToString(entry)))
+          .filter((entry): entry is string => typeof entry === "string" && entry.length > 0)
+      : [];
+    if (command && args.length > 0) {
+      return [command, ...args].join(" ");
+    }
+    if (command) {
+      return command;
+    }
+  }
+  return null;
 }
 
 function normalizeTodoStatus(status: string): string {
