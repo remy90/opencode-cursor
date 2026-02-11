@@ -54,11 +54,11 @@ export interface ProviderBoundary {
 export function parseProviderBoundaryMode(
   value: string | undefined,
 ): { mode: ProviderBoundaryMode; valid: boolean } {
-  const normalized = (value ?? "legacy").trim().toLowerCase();
+  const normalized = (value ?? "v1").trim().toLowerCase();
   if (normalized === "legacy" || normalized === "v1") {
     return { mode: normalized, valid: true };
   }
-  return { mode: "legacy", valid: false };
+  return { mode: "v1", valid: false };
 }
 
 export function createProviderBoundary(

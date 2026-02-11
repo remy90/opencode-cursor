@@ -6,11 +6,11 @@ import {
 } from "../../src/provider/boundary";
 
 describe("provider boundary", () => {
-  it("parses provider boundary mode with legacy default", () => {
+  it("parses provider boundary mode with v1 default", () => {
     expect(parseProviderBoundaryMode("legacy")).toEqual({ mode: "legacy", valid: true });
     expect(parseProviderBoundaryMode("v1")).toEqual({ mode: "v1", valid: true });
-    expect(parseProviderBoundaryMode(undefined)).toEqual({ mode: "legacy", valid: true });
-    expect(parseProviderBoundaryMode("invalid")).toEqual({ mode: "legacy", valid: false });
+    expect(parseProviderBoundaryMode(undefined)).toEqual({ mode: "v1", valid: true });
+    expect(parseProviderBoundaryMode("invalid")).toEqual({ mode: "v1", valid: false });
   });
 
   it("keeps legacy and v1 resolveChatParamTools behavior identical", () => {

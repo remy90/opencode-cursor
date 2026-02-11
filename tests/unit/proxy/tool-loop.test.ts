@@ -61,6 +61,42 @@ describe("proxy/tool-loop", () => {
     expect(call?.function.arguments).toBe("{\"path\":\"foo.txt\"}");
   });
 
+  it("extracts args from flat payload without args wrapper", () => {
+    const event: any = {
+      type: "tool_call",
+      call_id: "call_flat",
+      tool_call: {
+        editToolCall: {
+          path: "test.md",
+          streamContent: "hello",
+        },
+      },
+    };
+
+    const call = extractOpenAiToolCall(event, new Set(["edit"]));
+    expect(call).not.toBeNull();
+    expect(call?.function.name).toBe("edit");
+    expect(call?.function.arguments).toBe("{\"path\":\"test.md\",\"streamContent\":\"hello\"}");
+  });
+
+  it("skips result-only tool_call payloads without args", () => {
+    const event: any = {
+      type: "tool_call",
+      subtype: "completed",
+      call_id: "call_completed",
+      tool_call: {
+        editToolCall: {
+          result: {
+            success: true,
+          },
+        },
+      },
+    };
+
+    const call = extractOpenAiToolCall(event, new Set(["edit"]));
+    expect(call).toBeNull();
+  });
+
   it("ignores tool calls not present in allowed names", () => {
     const event: any = {
       type: "tool_call",

@@ -290,7 +290,7 @@ CI runs split suites in `.github/workflows/ci.yml`:
 - `unit` job: `bun run test:ci:unit`
 - `integration` job: `bun run test:ci:integration`
 
-Integration CI defaults to OpenCode-owned loop mode:
+Integration CI pins OpenCode-owned loop mode to deterministic settings:
 
 - `CURSOR_ACP_TOOL_LOOP_MODE=opencode`
 - `CURSOR_ACP_PROVIDER_BOUNDARY=v1`
@@ -327,9 +327,11 @@ Set the log level via environment variable:
 - `CURSOR_ACP_LOG_LEVEL=error` - Errors only
 
 Provider-boundary rollout:
+- Default: `CURSOR_ACP_PROVIDER_BOUNDARY=v1`
+- Default: `CURSOR_ACP_PROVIDER_BOUNDARY_AUTOFALLBACK=true`
 - `CURSOR_ACP_PROVIDER_BOUNDARY=legacy` - Original provider/runtime boundary behavior
-- `CURSOR_ACP_PROVIDER_BOUNDARY=v1` - New shared boundary/interception path (recommended)
-- `CURSOR_ACP_PROVIDER_BOUNDARY_AUTOFALLBACK=true` - Emergency fallback from `v1` to `legacy` for the current request only
+- `CURSOR_ACP_PROVIDER_BOUNDARY=v1` - Shared boundary/interception path
+- `CURSOR_ACP_PROVIDER_BOUNDARY_AUTOFALLBACK=false` - Disable fallback and keep strict `v1` behavior
 - `CURSOR_ACP_TOOL_LOOP_MAX_REPEAT=3` - Max repeated failing tool-call fingerprints before guard termination (or fallback when enabled)
 
 Auto-fallback trigger conditions:

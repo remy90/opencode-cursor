@@ -93,7 +93,7 @@ const PROVIDER_BOUNDARY =
     ? LEGACY_PROVIDER_BOUNDARY
     : createProviderBoundary(PROVIDER_BOUNDARY_MODE, CURSOR_PROVIDER_ID);
 const ENABLE_PROVIDER_BOUNDARY_AUTOFALLBACK =
-  process.env.CURSOR_ACP_PROVIDER_BOUNDARY_AUTOFALLBACK === "true";
+  process.env.CURSOR_ACP_PROVIDER_BOUNDARY_AUTOFALLBACK !== "false";
 const TOOL_LOOP_MAX_REPEAT_RAW = process.env.CURSOR_ACP_TOOL_LOOP_MAX_REPEAT;
 const {
   value: TOOL_LOOP_MAX_REPEAT,
@@ -1360,7 +1360,7 @@ export const CursorPlugin: Plugin = async ({ $, directory, client, serverUrl }: 
     log.warn("Invalid CURSOR_ACP_TOOL_LOOP_MODE; defaulting to opencode", { value: TOOL_LOOP_MODE_RAW });
   }
   if (!PROVIDER_BOUNDARY_MODE_VALID) {
-    log.warn("Invalid CURSOR_ACP_PROVIDER_BOUNDARY; defaulting to legacy", {
+    log.warn("Invalid CURSOR_ACP_PROVIDER_BOUNDARY; defaulting to v1", {
       value: PROVIDER_BOUNDARY_MODE_RAW,
     });
   }

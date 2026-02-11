@@ -1,4 +1,7 @@
 import type { StreamJsonToolCallEvent } from "../streaming/types.js";
+import { createLogger } from "../utils/logger.js";
+
+const log = createLogger("proxy:tool-loop");
 
 export interface OpenAiToolCall {
   id: string;
@@ -49,7 +52,10 @@ export function extractOpenAiToolCall(
     return null;
   }
 
-  const { name, args } = extractToolNameAndArgs(event);
+  const { name, args, skipped } = extractToolNameAndArgs(event);
+  if (skipped) {
+    return null;
+  }
   if (!name) {
     return null;
   }
@@ -57,6 +63,16 @@ export function extractOpenAiToolCall(
   const resolvedName = resolveAllowedToolName(name, allowedToolNames);
   if (!resolvedName) {
     return null;
+  }
+
+  if (args === undefined && event.subtype === "started") {
+    log.debug("Tool call args extraction returned undefined", {
+      toolName: name,
+      subtype: event.subtype ?? "none",
+      payloadKeys: Object.entries(event.tool_call || {}).map(([k, v]) =>
+        `${k}:[${isRecord(v) ? Object.keys(v).join(",") : typeof v}]`),
+      hasCallId: Boolean(event.call_id),
+    });
   }
 
   const callId = event.call_id || (event as any).tool_call_id || "call_unknown";
@@ -130,7 +146,11 @@ export function createToolCallStreamChunks(meta: ToolLoopMeta, toolCall: OpenAiT
   return [toolDelta, finishChunk];
 }
 
-function extractToolNameAndArgs(event: StreamJsonToolCallEvent): { name: string | null; args: unknown } {
+function extractToolNameAndArgs(event: StreamJsonToolCallEvent): {
+  name: string | null;
+  args: unknown;
+  skipped: boolean;
+} {
   let name = typeof (event as any).name === "string" ? (event as any).name : null;
   let args: unknown = undefined;
 
@@ -140,14 +160,28 @@ function extractToolNameAndArgs(event: StreamJsonToolCallEvent): { name: string 
     if (!name) {
       name = normalizeToolName(rawName);
     }
-    args = payload?.args;
+    const payloadRecord = isRecord(payload) ? payload : null;
+    args = payloadRecord?.args;
+
+    // Some tool-call events include a flat payload without an `args` wrapper.
+    if (args === undefined && payloadRecord) {
+      const { result: _result, ...rest } = payloadRecord;
+      const restKeys = Object.keys(rest);
+      if (restKeys.length === 0) {
+        if (name) {
+          name = normalizeToolName(name);
+        }
+        return { name, args: undefined, skipped: true };
+      }
+      args = rest;
+    }
   }
 
   if (name) {
     name = normalizeToolName(name);
   }
 
-  return { name, args };
+  return { name, args, skipped: false };
 }
 
 function normalizeToolName(raw: string): string {
@@ -211,4 +245,8 @@ function toOpenAiArguments(args: unknown): string {
   }
 
   return JSON.stringify({ value: args });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

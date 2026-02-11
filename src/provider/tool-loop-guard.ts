@@ -20,6 +20,7 @@ export interface ToolLoopGuardDecision {
 
 export interface ToolLoopGuard {
   evaluate(toolCall: OpenAiToolCall): ToolLoopGuardDecision;
+  evaluateValidation(toolCall: OpenAiToolCall, validationSignature: string): ToolLoopGuardDecision;
   resetFingerprint(fingerprint: string): void;
 }
 
@@ -40,40 +41,75 @@ export function createToolLoopGuard(
   messages: Array<unknown>,
   maxRepeat: number,
 ): ToolLoopGuard {
-  const { byCallId, latest, initialCounts } = indexToolLoopHistory(messages);
+  const {
+    byCallId,
+    latest,
+    initialCounts,
+    initialCoarseCounts,
+    initialValidationCounts,
+    initialValidationCoarseCounts,
+  } = indexToolLoopHistory(messages);
   const counts = new Map<string, number>(initialCounts);
+  const coarseCounts = new Map<string, number>(initialCoarseCounts);
+  const validationCounts = new Map<string, number>(initialValidationCounts);
+  const validationCoarseCounts = new Map<string, number>(initialValidationCoarseCounts);
 
   return {
     evaluate(toolCall) {
       const errorClass = byCallId.get(toolCall.id) ?? latest ?? "unknown";
       const argShape = deriveArgumentShape(toolCall.function.arguments);
-      const fingerprint = `${toolCall.function.name}|${argShape}|${errorClass}`;
+      const strictFingerprint = `${toolCall.function.name}|${argShape}|${errorClass}`;
+      const coarseFingerprint = `${toolCall.function.name}|${errorClass}`;
 
-      if (errorClass === "success") {
-        return {
-          fingerprint,
-          repeatCount: 0,
-          maxRepeat,
-          errorClass,
-          triggered: false,
-          tracked: false,
-        };
-      }
-
-      const repeatCount = (counts.get(fingerprint) ?? 0) + 1;
-      counts.set(fingerprint, repeatCount);
-      return {
-        fingerprint,
-        repeatCount,
-        maxRepeat,
+      return evaluateWithFingerprints(
         errorClass,
-        triggered: repeatCount > maxRepeat,
-        tracked: true,
-      };
+        strictFingerprint,
+        coarseFingerprint,
+        counts,
+        coarseCounts,
+        maxRepeat,
+      );
+    },
+
+    evaluateValidation(toolCall, validationSignature) {
+      const normalizedSignature = normalizeValidationSignature(validationSignature);
+      const strictFingerprint = `${toolCall.function.name}|schema:${normalizedSignature}|validation`;
+      const coarseFingerprint = `${toolCall.function.name}|validation`;
+      return evaluateWithFingerprints(
+        "validation",
+        strictFingerprint,
+        coarseFingerprint,
+        validationCounts,
+        validationCoarseCounts,
+        maxRepeat,
+      );
     },
 
     resetFingerprint(fingerprint) {
       counts.delete(fingerprint);
+      coarseCounts.delete(fingerprint);
+      validationCounts.delete(fingerprint);
+      validationCoarseCounts.delete(fingerprint);
+      const parts = fingerprint.split("|");
+      if (parts.length >= 3) {
+        const tool = parts[0];
+        const errorClass = parts[parts.length - 1];
+        coarseCounts.delete(`${tool}|${errorClass}`);
+        validationCoarseCounts.delete(`${tool}|${errorClass}`);
+      } else if (parts.length === 2) {
+        const tool = parts[0];
+        const errorClass = parts[1];
+        for (const key of counts.keys()) {
+          if (key.startsWith(`${tool}|`) && key.endsWith(`|${errorClass}`)) {
+            counts.delete(key);
+          }
+        }
+        for (const key of validationCounts.keys()) {
+          if (key.startsWith(`${tool}|`) && key.endsWith(`|${errorClass}`)) {
+            validationCounts.delete(key);
+          }
+        }
+      }
     },
   };
 }
@@ -109,9 +145,15 @@ function indexToolLoopHistory(messages: Array<unknown>): {
   byCallId: Map<string, ToolLoopErrorClass>;
   latest: ToolLoopErrorClass | null;
   initialCounts: Map<string, number>;
+  initialCoarseCounts: Map<string, number>;
+  initialValidationCounts: Map<string, number>;
+  initialValidationCoarseCounts: Map<string, number>;
 } {
   const { byCallId, latest } = indexToolResultErrorClasses(messages);
   const initialCounts = new Map<string, number>();
+  const initialCoarseCounts = new Map<string, number>();
+  const initialValidationCounts = new Map<string, number>();
+  const initialValidationCoarseCounts = new Map<string, number>();
   const assistantCalls = extractAssistantToolCalls(messages);
 
   for (const call of assistantCalls) {
@@ -119,11 +161,30 @@ function indexToolLoopHistory(messages: Array<unknown>): {
     if (errorClass === "success") {
       continue;
     }
-    const fingerprint = `${call.name}|${call.argShape}|${errorClass}`;
-    initialCounts.set(fingerprint, (initialCounts.get(fingerprint) ?? 0) + 1);
+    const strictFingerprint = `${call.name}|${call.argShape}|${errorClass}`;
+    const coarseFingerprint = `${call.name}|${errorClass}`;
+    incrementCount(initialCounts, strictFingerprint);
+    incrementCount(initialCoarseCounts, coarseFingerprint);
+
+    const schemaSignature = deriveSchemaValidationSignature(call.name, call.argKeys);
+    if (!schemaSignature) {
+      continue;
+    }
+    incrementCount(
+      initialValidationCounts,
+      `${call.name}|schema:${schemaSignature}|validation`,
+    );
+    incrementCount(initialValidationCoarseCounts, `${call.name}|validation`);
   }
 
-  return { byCallId, latest, initialCounts };
+  return {
+    byCallId,
+    latest,
+    initialCounts,
+    initialCoarseCounts,
+    initialValidationCounts,
+    initialValidationCoarseCounts,
+  };
 }
 
 function classifyToolResult(content: unknown): ToolLoopErrorClass {
@@ -132,7 +193,17 @@ function classifyToolResult(content: unknown): ToolLoopErrorClass {
     return "unknown";
   }
 
-  if (containsAny(text, ["missing required", "missing", "invalid", "schema", "unexpected", "type error"])) {
+  if (
+    containsAny(text, [
+      "missing required",
+      "missing required argument",
+      "invalid",
+      "schema",
+      "unexpected",
+      "type error",
+      "must be of type",
+    ])
+  ) {
     return "validation";
   }
   if (containsAny(text, ["enoent", "not found", "no such file"])) {
@@ -167,8 +238,9 @@ function extractAssistantToolCalls(messages: Array<unknown>): Array<{
   id: string;
   name: string;
   argShape: string;
+  argKeys: string[];
 }> {
-  const calls: Array<{ id: string; name: string; argShape: string }> = [];
+  const calls: Array<{ id: string; name: string; argShape: string; argKeys: string[] }> = [];
   for (const message of messages) {
     if (!isRecord(message) || message.role !== "assistant" || !Array.isArray(message.tool_calls)) {
       continue;
@@ -189,10 +261,81 @@ function extractAssistantToolCalls(messages: Array<unknown>): Array<{
         id,
         name,
         argShape: deriveArgumentShape(rawArguments),
+        argKeys: extractArgumentKeys(rawArguments),
       });
     }
   }
   return calls;
+}
+
+function extractArgumentKeys(rawArguments: string): string[] {
+  try {
+    const parsed = JSON.parse(rawArguments);
+    if (!isRecord(parsed)) {
+      return [];
+    }
+    return Object.keys(parsed);
+  } catch {
+    return [];
+  }
+}
+
+function deriveSchemaValidationSignature(toolName: string, argKeys: string[]): string | null {
+  if (toolName !== "edit") {
+    return null;
+  }
+  const argKeySet = new Set(argKeys);
+  const required = ["path", "old_string", "new_string"];
+  const missing = required.filter((key) => !argKeySet.has(key));
+  if (missing.length === 0) {
+    return null;
+  }
+  return `missing:${missing.join(",")}`;
+}
+
+function normalizeValidationSignature(signature: string): string {
+  const normalized = signature.trim().toLowerCase();
+  return normalized.length > 0 ? normalized : "invalid";
+}
+
+function evaluateWithFingerprints(
+  errorClass: ToolLoopErrorClass,
+  strictFingerprint: string,
+  coarseFingerprint: string,
+  strictCounts: Map<string, number>,
+  coarseCounts: Map<string, number>,
+  maxRepeat: number,
+): ToolLoopGuardDecision {
+  if (errorClass === "success") {
+    return {
+      fingerprint: strictFingerprint,
+      repeatCount: 0,
+      maxRepeat,
+      errorClass,
+      triggered: false,
+      tracked: false,
+    };
+  }
+
+  const strictRepeatCount = (strictCounts.get(strictFingerprint) ?? 0) + 1;
+  strictCounts.set(strictFingerprint, strictRepeatCount);
+  const coarseRepeatCount = (coarseCounts.get(coarseFingerprint) ?? 0) + 1;
+  coarseCounts.set(coarseFingerprint, coarseRepeatCount);
+  const strictTriggered = strictRepeatCount > maxRepeat;
+  const coarseTriggered = coarseRepeatCount > maxRepeat;
+  const preferCoarseFingerprint = coarseTriggered && !strictTriggered;
+  return {
+    fingerprint: preferCoarseFingerprint ? coarseFingerprint : strictFingerprint,
+    repeatCount: preferCoarseFingerprint ? coarseRepeatCount : strictRepeatCount,
+    maxRepeat,
+    errorClass,
+    triggered: strictTriggered || coarseTriggered,
+    tracked: true,
+  };
+}
+
+function incrementCount(map: Map<string, number>, key: string): void {
+  map.set(key, (map.get(key) ?? 0) + 1);
 }
 
 function shapeOf(value: unknown): unknown {

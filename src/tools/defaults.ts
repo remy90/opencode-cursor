@@ -159,9 +159,19 @@ export function registerDefaultTools(registry: ToolRegistry): void {
     const fs = await import("fs");
     const path = await import("path");
     try {
-      const filePath = args.path as string;
-      const oldString = args.old_string as string;
-      const newString = args.new_string as string;
+      const resolvedArgs = resolveEditArguments(args);
+      const filePath = resolvedArgs.path;
+      const oldString = resolvedArgs.old_string;
+      const newString = resolvedArgs.new_string;
+      if (!filePath) {
+        throw new Error("edit: missing required argument 'path'");
+      }
+      if (typeof oldString !== "string") {
+        throw new Error("edit: missing required argument 'old_string'");
+      }
+      if (typeof newString !== "string") {
+        throw new Error("edit: missing required argument 'new_string'");
+      }
       let content = "";
       try {
         content = fs.readFileSync(filePath, "utf-8");
@@ -410,6 +420,81 @@ export function registerDefaultTools(registry: ToolRegistry): void {
       created: info.birthtime.toISOString(),
     }, null, 2);
   });
+}
+
+function resolveEditArguments(args: Record<string, unknown>): {
+  path: string;
+  old_string: string | undefined;
+  new_string: string | undefined;
+} {
+  const path = typeof args.path === "string" ? args.path : "";
+  let oldString = typeof args.old_string === "string" ? args.old_string : undefined;
+  let newString = typeof args.new_string === "string" ? args.new_string : undefined;
+
+  if (newString === undefined) {
+    const fallbackContent = coerceToString(args.content ?? args.streamContent);
+    if (fallbackContent !== null) {
+      newString = fallbackContent;
+    }
+  }
+
+  if (oldString === undefined && newString !== undefined) {
+    oldString = "";
+  }
+
+  return {
+    path,
+    old_string: oldString,
+    new_string: newString,
+  };
+}
+
+function coerceToString(value: unknown): string | null {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (Array.isArray(value)) {
+    const parts: string[] = [];
+    for (const item of value) {
+      if (typeof item === "string") {
+        parts.push(item);
+      } else if (typeof item === "object" && item !== null) {
+        const record = item as Record<string, unknown>;
+        if (typeof record.text === "string") {
+          parts.push(record.text);
+        } else if (typeof record.content === "string") {
+          parts.push(record.content);
+        } else if (typeof record.value === "string") {
+          parts.push(record.value);
+        } else {
+          parts.push(JSON.stringify(record));
+        }
+      } else {
+        parts.push(String(item));
+      }
+    }
+    return parts.length > 0 ? parts.join("") : null;
+  }
+  if (typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    if (typeof record.text === "string") {
+      return record.text;
+    }
+    if (typeof record.content === "string") {
+      return record.content;
+    }
+    if (typeof record.value === "string") {
+      return record.value;
+    }
+    return JSON.stringify(record);
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  return null;
 }
 
 /**

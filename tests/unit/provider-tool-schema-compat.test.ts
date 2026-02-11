@@ -40,6 +40,39 @@ describe("tool schema compatibility", () => {
     expect(result.validation.ok).toBe(true);
   });
 
+  it("normalizes filename alias to path", () => {
+    const result = applyToolSchemaCompat(
+      {
+        id: "c1",
+        type: "function",
+        function: {
+          name: "write",
+          arguments: JSON.stringify({
+            filename: "/tmp/b.txt",
+            content: "hello",
+          }),
+        },
+      },
+      new Map([
+        [
+          "write",
+          {
+            type: "object",
+            properties: {
+              path: { type: "string" },
+              content: { type: "string" },
+            },
+            required: ["path", "content"],
+          },
+        ],
+      ]),
+    );
+
+    expect(result.normalizedArgs.path).toBe("/tmp/b.txt");
+    expect(result.normalizedArgs.filename).toBeUndefined();
+    expect(result.validation.ok).toBe(true);
+  });
+
   it("keeps canonical keys when aliases collide", () => {
     const result = applyToolSchemaCompat(
       {
@@ -89,7 +122,7 @@ describe("tool schema compatibility", () => {
     expect(todos[2].priority).toBe("medium");
   });
 
-  it("keeps edit semantics and surfaces validation hints for missing fields", () => {
+  it("repairs edit content payloads into old/new string arguments", () => {
     const result = applyToolSchemaCompat(
       {
         id: "c1",
@@ -120,10 +153,278 @@ describe("tool schema compatibility", () => {
     );
 
     const args = JSON.parse(result.toolCall.function.arguments);
-    expect(args.content).toBe("new full content");
+    expect(args.path).toBe("/tmp/todo.md");
+    expect(args.old_string).toBe("");
+    expect(args.new_string).toBe("new full content");
+    expect(args.content).toBeUndefined();
+    expect(result.validation.ok).toBe(true);
+    expect(result.validation.missing).toEqual([]);
+    expect(result.validation.typeErrors).toEqual([]);
+  });
+
+  it("repairs edit content into old/new even when path is missing", () => {
+    const result = applyToolSchemaCompat(
+      {
+        id: "c_missing_path",
+        type: "function",
+        function: {
+          name: "edit",
+          arguments: JSON.stringify({
+            content: "new full content",
+          }),
+        },
+      },
+      new Map([
+        [
+          "edit",
+          {
+            type: "object",
+            properties: {
+              path: { type: "string" },
+              old_string: { type: "string" },
+              new_string: { type: "string" },
+            },
+            required: ["path", "old_string", "new_string"],
+            additionalProperties: false,
+          },
+        ],
+      ]),
+    );
+
+    const args = JSON.parse(result.toolCall.function.arguments);
+    expect(args.new_string).toBe("new full content");
+    expect(args.old_string).toBe("");
     expect(result.validation.ok).toBe(false);
-    expect(result.validation.missing).toEqual(["old_string", "new_string"]);
-    expect(result.validation.repairHint).toContain("edit requires path, old_string, and new_string");
+    expect(result.validation.missing).toEqual(["path"]);
+  });
+
+  it("strips unsupported fields when schema disallows additional properties", () => {
+    const result = applyToolSchemaCompat(
+      {
+        id: "c1",
+        type: "function",
+        function: {
+          name: "todowrite",
+          arguments: JSON.stringify({
+            todos: [{ content: "Book flights", status: "pending" }],
+            merge: true,
+          }),
+        },
+      },
+      new Map([
+        [
+          "todowrite",
+          {
+            type: "object",
+            properties: {
+              todos: { type: "array" },
+            },
+            required: ["todos"],
+            additionalProperties: false,
+          },
+        ],
+      ]),
+    );
+
+    const args = JSON.parse(result.toolCall.function.arguments);
+    expect(args.todos).toBeDefined();
+    expect(args.merge).toBeUndefined();
+    expect(result.validation.ok).toBe(true);
+    expect(result.validation.unexpected).toEqual(["merge"]);
+  });
+
+  it("repairs edit streamContent aliases into new_string", () => {
+    const result = applyToolSchemaCompat(
+      {
+        id: "c2",
+        type: "function",
+        function: {
+          name: "edit",
+          arguments: JSON.stringify({
+            path: "TODO.md",
+            streamContent: "updated body",
+          }),
+        },
+      },
+      new Map([
+        [
+          "edit",
+          {
+            type: "object",
+            properties: {
+              path: { type: "string" },
+              old_string: { type: "string" },
+              new_string: { type: "string" },
+            },
+            required: ["path", "old_string", "new_string"],
+            additionalProperties: false,
+          },
+        ],
+      ]),
+    );
+
+    const args = JSON.parse(result.toolCall.function.arguments);
+    expect(args.path).toBe("TODO.md");
+    expect(args.old_string).toBe("");
+    expect(args.new_string).toBe("updated body");
+    expect(result.validation.ok).toBe(true);
+  });
+
+  it("coerces array streamContent chunks into edit old/new strings", () => {
+    const result = applyToolSchemaCompat(
+      {
+        id: "c3",
+        type: "function",
+        function: {
+          name: "edit",
+          arguments: JSON.stringify({
+            path: "TODO.md",
+            streamContent: ["# Travel Plan\n", "- Flight\n", "- Hotel\n"],
+          }),
+        },
+      },
+      new Map([
+        [
+          "edit",
+          {
+            type: "object",
+            properties: {
+              path: { type: "string" },
+              old_string: { type: "string" },
+              new_string: { type: "string" },
+            },
+            required: ["path", "old_string", "new_string"],
+            additionalProperties: false,
+          },
+        ],
+      ]),
+    );
+
+    const args = JSON.parse(result.toolCall.function.arguments);
+    expect(args.path).toBe("TODO.md");
+    expect(args.old_string).toBe("");
+    expect(args.new_string).toBe("# Travel Plan\n- Flight\n- Hotel\n");
+    expect(args.streamContent).toBeUndefined();
+    expect(args.content).toBeUndefined();
+    expect(result.validation.ok).toBe(true);
+    expect(result.validation.missing).toEqual([]);
+  });
+
+  it("coerces object-wrapped content into edit old/new strings", () => {
+    const result = applyToolSchemaCompat(
+      {
+        id: "c4",
+        type: "function",
+        function: {
+          name: "edit",
+          arguments: JSON.stringify({
+            path: "SIMPLE_TEST.md",
+            streamContent: { text: "ok", type: "full" },
+          }),
+        },
+      },
+      new Map([
+        [
+          "edit",
+          {
+            type: "object",
+            properties: {
+              path: { type: "string" },
+              old_string: { type: "string" },
+              new_string: { type: "string" },
+            },
+            required: ["path", "old_string", "new_string"],
+            additionalProperties: false,
+          },
+        ],
+      ]),
+    );
+
+    const args = JSON.parse(result.toolCall.function.arguments);
+    expect(args.path).toBe("SIMPLE_TEST.md");
+    expect(args.old_string).toBe("");
+    expect(typeof args.new_string).toBe("string");
+    expect(args.new_string.length).toBeGreaterThan(0);
+    expect(result.validation.ok).toBe(true);
+  });
+
+  it("coerces nested array of {text} chunk objects for edit", () => {
+    const result = applyToolSchemaCompat(
+      {
+        id: "c5",
+        type: "function",
+        function: {
+          name: "edit",
+          arguments: JSON.stringify({
+            path: "TODO.md",
+            streamContent: [
+              { text: "# Plan\n" },
+              { text: "- Step 1\n" },
+              { text: "- Step 2\n" },
+            ],
+          }),
+        },
+      },
+      new Map([
+        [
+          "edit",
+          {
+            type: "object",
+            properties: {
+              path: { type: "string" },
+              old_string: { type: "string" },
+              new_string: { type: "string" },
+            },
+            required: ["path", "old_string", "new_string"],
+            additionalProperties: false,
+          },
+        ],
+      ]),
+    );
+
+    const args = JSON.parse(result.toolCall.function.arguments);
+    expect(args.path).toBe("TODO.md");
+    expect(args.old_string).toBe("");
+    expect(args.new_string).toBe("# Plan\n- Step 1\n- Step 2\n");
+    expect(result.validation.ok).toBe(true);
+  });
+
+  it("preserves valid edit calls with explicit old/new strings", () => {
+    const result = applyToolSchemaCompat(
+      {
+        id: "c6",
+        type: "function",
+        function: {
+          name: "edit",
+          arguments: JSON.stringify({
+            path: "file.ts",
+            old_string: "foo",
+            new_string: "bar",
+          }),
+        },
+      },
+      new Map([
+        [
+          "edit",
+          {
+            type: "object",
+            properties: {
+              path: { type: "string" },
+              old_string: { type: "string" },
+              new_string: { type: "string" },
+            },
+            required: ["path", "old_string", "new_string"],
+            additionalProperties: false,
+          },
+        ],
+      ]),
+    );
+
+    const args = JSON.parse(result.toolCall.function.arguments);
+    expect(args.path).toBe("file.ts");
+    expect(args.old_string).toBe("foo");
+    expect(args.new_string).toBe("bar");
+    expect(result.validation.ok).toBe(true);
   });
 
   it("builds schema map from request tools", () => {

@@ -240,6 +240,247 @@ describe("provider runtime interception fallback", () => {
     expect(interceptedArgs).toContain("\"content\":\"hello\"");
   });
 
+  it("repairs edit content payloads into canonical edit arguments in v1", async () => {
+    let interceptedArgs = "";
+    const toolResults: any[] = [];
+    const result = await handleToolLoopEventV1({
+      ...createBaseOptions({
+        event: {
+          type: "tool_call",
+          call_id: "c4",
+          tool_call: {
+            editToolCall: {
+              args: { path: "TODO.md", content: "full rewrite" },
+            },
+          },
+        } as any,
+        allowedToolNames: new Set(["edit"]),
+        toolSchemaMap: new Map([
+          [
+            "edit",
+            {
+              type: "object",
+              properties: {
+                path: { type: "string" },
+                old_string: { type: "string" },
+                new_string: { type: "string" },
+              },
+              required: ["path", "old_string", "new_string"],
+              additionalProperties: false,
+            },
+          ],
+        ]),
+        onToolResult: async (toolResult) => {
+          toolResults.push(toolResult);
+        },
+        onInterceptedToolCall: async (toolCall) => {
+          interceptedArgs = toolCall.function.arguments;
+        },
+      }),
+      boundary: createProviderBoundary("v1", "cursor-acp"),
+    });
+
+    expect(result.intercepted).toBe(true);
+    expect(result.skipConverter).toBe(true);
+    expect(result.terminate).toBeUndefined();
+    expect(interceptedArgs).toContain("\"path\":\"TODO.md\"");
+    expect(interceptedArgs).toContain("\"old_string\":\"\"");
+    expect(interceptedArgs).toContain("\"new_string\":\"full rewrite\"");
+    expect(interceptedArgs).not.toContain("\"content\":");
+    expect(toolResults).toHaveLength(0);
+  });
+
+  it("emits a non-fatal hint and skips malformed edit execution in v1 pass-through mode", async () => {
+    const toolResults: any[] = [];
+    let interceptedCount = 0;
+    const result = await handleToolLoopEventV1({
+      ...createBaseOptions({
+        event: {
+          type: "tool_call",
+          call_id: "c4",
+          tool_call: {
+            editToolCall: {
+              args: { path: "TODO.md" },
+            },
+          },
+        } as any,
+        allowedToolNames: new Set(["edit"]),
+        toolSchemaMap: new Map([
+          [
+            "edit",
+            {
+              type: "object",
+              properties: {
+                path: { type: "string" },
+                old_string: { type: "string" },
+                new_string: { type: "string" },
+              },
+              required: ["path", "old_string", "new_string"],
+              additionalProperties: false,
+            },
+          ],
+        ]),
+        onToolResult: async (toolResult) => {
+          toolResults.push(toolResult);
+        },
+        onInterceptedToolCall: async () => {
+          interceptedCount += 1;
+        },
+      }),
+      boundary: createProviderBoundary("v1", "cursor-acp"),
+      schemaValidationFailureMode: "pass_through",
+    });
+
+    expect(result).toEqual({ intercepted: false, skipConverter: true });
+    expect(interceptedCount).toBe(0);
+    expect(toolResults).toHaveLength(1);
+    expect(toolResults[0]?.choices?.[0]?.delta?.content).toContain("Skipped malformed tool call");
+  });
+
+  it("emits non-fatal hint for edit payloads missing path", async () => {
+    const toolResults: any[] = [];
+    let interceptedCount = 0;
+    const result = await handleToolLoopEventV1({
+      ...createBaseOptions({
+        event: {
+          type: "tool_call",
+          call_id: "c4",
+          tool_call: {
+            editToolCall: {
+              args: { content: "full rewrite" },
+            },
+          },
+        } as any,
+        allowedToolNames: new Set(["edit"]),
+        toolSchemaMap: new Map([
+          [
+            "edit",
+            {
+              type: "object",
+              properties: {
+                path: { type: "string" },
+                old_string: { type: "string" },
+                new_string: { type: "string" },
+              },
+              required: ["path", "old_string", "new_string"],
+              additionalProperties: false,
+            },
+          ],
+        ]),
+        onToolResult: async (toolResult) => {
+          toolResults.push(toolResult);
+        },
+        onInterceptedToolCall: async () => {
+          interceptedCount += 1;
+        },
+      }),
+      boundary: createProviderBoundary("v1", "cursor-acp"),
+      schemaValidationFailureMode: "pass_through",
+    });
+
+    expect(result).toEqual({ intercepted: false, skipConverter: true });
+    expect(interceptedCount).toBe(0);
+    expect(toolResults).toHaveLength(1);
+    expect(toolResults[0]?.choices?.[0]?.delta?.content).toContain("Skipped malformed tool call");
+  });
+
+  it("still returns terminal schema validation error for edit type errors", async () => {
+    const toolResults: any[] = [];
+    let interceptedCount = 0;
+    const result = await handleToolLoopEventV1({
+      ...createBaseOptions({
+        event: {
+          type: "tool_call",
+          call_id: "c4",
+          tool_call: {
+            editToolCall: {
+              args: { path: 123, content: "full rewrite" },
+            },
+          },
+        } as any,
+        allowedToolNames: new Set(["edit"]),
+        toolSchemaMap: new Map([
+          [
+            "edit",
+            {
+              type: "object",
+              properties: {
+                path: { type: "string" },
+                old_string: { type: "string" },
+                new_string: { type: "string" },
+              },
+              required: ["path", "old_string", "new_string"],
+              additionalProperties: false,
+            },
+          ],
+        ]),
+        onToolResult: async (toolResult) => {
+          toolResults.push(toolResult);
+        },
+        onInterceptedToolCall: async () => {
+          interceptedCount += 1;
+        },
+      }),
+      boundary: createProviderBoundary("v1", "cursor-acp"),
+      schemaValidationFailureMode: "pass_through",
+    });
+
+    expect(result.intercepted).toBe(false);
+    expect(result.skipConverter).toBe(true);
+    expect(result.terminate?.reason).toBe("schema_validation");
+    expect(result.terminate?.message).toContain("type errors");
+    expect(interceptedCount).toBe(0);
+    expect(toolResults).toHaveLength(0);
+  });
+
+  it("does not fallback for edit missing-path validation; emits hint instead", async () => {
+    let fallbackCalled = false;
+    const toolResults: any[] = [];
+    const result = await handleToolLoopEventWithFallback({
+      ...createBaseOptions({
+        event: {
+          type: "tool_call",
+          call_id: "c4",
+          tool_call: {
+            editToolCall: {
+              args: { content: "full rewrite" },
+            },
+          },
+        } as any,
+        allowedToolNames: new Set(["edit"]),
+        toolSchemaMap: new Map([
+          [
+            "edit",
+            {
+              type: "object",
+              properties: {
+                path: { type: "string" },
+                old_string: { type: "string" },
+                new_string: { type: "string" },
+              },
+              required: ["path", "old_string", "new_string"],
+              additionalProperties: false,
+            },
+          ],
+        ]),
+        onToolResult: async (toolResult) => {
+          toolResults.push(toolResult);
+        },
+      }),
+      boundary: createProviderBoundary("v1", "cursor-acp"),
+      boundaryMode: "v1",
+      autoFallbackToLegacy: true,
+      onFallbackToLegacy: () => {
+        fallbackCalled = true;
+      },
+    });
+
+    expect(fallbackCalled).toBe(false);
+    expect(result).toEqual({ intercepted: false, skipConverter: true });
+    expect(toolResults).toHaveLength(1);
+    expect(toolResults[0]?.choices?.[0]?.delta?.content).toContain("Skipped malformed tool call");
+  });
+
   it("returns terminal result when loop guard threshold is reached without fallback", async () => {
     const guard = createToolLoopGuard(
       [{ role: "tool", tool_call_id: "c1", content: "invalid schema: missing path" }],
@@ -265,11 +506,42 @@ describe("provider runtime interception fallback", () => {
     expect(result.terminate?.reason).toBe("loop_guard");
   });
 
-  it("falls back to legacy when loop guard threshold is reached and auto-fallback is enabled", async () => {
+  it("does not fallback on validation loop-guard termination; returns terminal response", async () => {
+    let fallbackCalled = false;
+    const guard = createToolLoopGuard(
+      [{ role: "tool", tool_call_id: "c1", content: "invalid schema: missing path" }],
+      1,
+    );
+    guard.evaluate({
+      id: "c1",
+      type: "function",
+      function: { name: "read", arguments: "{\"path\":\"foo.txt\"}" },
+    });
+
+    const result = await handleToolLoopEventWithFallback({
+      ...createBaseOptions({
+        toolLoopGuard: guard,
+      }),
+      boundary: createProviderBoundary("v1", "cursor-acp"),
+      boundaryMode: "v1",
+      autoFallbackToLegacy: true,
+      onFallbackToLegacy: () => {
+        fallbackCalled = true;
+      },
+    });
+
+    expect(fallbackCalled).toBe(false);
+    expect(result.intercepted).toBe(false);
+    expect(result.skipConverter).toBe(true);
+    expect(result.terminate?.reason).toBe("loop_guard");
+    expect(result.terminate?.errorClass).toBe("validation");
+  });
+
+  it("falls back on non-validation loop-guard termination when auto-fallback is enabled", async () => {
     let fallbackCalled = false;
     let interceptedName = "";
     const guard = createToolLoopGuard(
-      [{ role: "tool", tool_call_id: "c1", content: "invalid schema: missing path" }],
+      [{ role: "tool", tool_call_id: "c1", content: "timeout while running tool" }],
       1,
     );
     guard.evaluate({

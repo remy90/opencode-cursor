@@ -163,6 +163,26 @@ process.stdin.on("end", () => {
         },
       },
     ];
+  } else if (scenario === "tool-edit-missing-path") {
+    events = [
+      {
+        type: "tool_call",
+        call_id: "c1",
+        tool_call: {
+          editToolCall: {
+            args: { content: "full rewrite" },
+          },
+        },
+      },
+      {
+        type: "assistant",
+        timestamp_ms: now + 1,
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "edit missing path fallback text" }],
+        },
+      },
+    ];
   } else {
     events = [
       {
@@ -377,7 +397,7 @@ describe("OpenCode-owned tool loop integration", () => {
     expect(json.choices?.[0]?.finish_reason).toBe("tool_calls");
   });
 
-  it("does not rewrite edit tool calls to write when args are invalid", async () => {
+  it("repairs non-streaming edit args and returns tool call payload", async () => {
     process.env.MOCK_CURSOR_SCENARIO = "tool-edit-invalid";
     process.env.MOCK_CURSOR_PROMPT_FILE = "";
 
@@ -390,12 +410,16 @@ describe("OpenCode-owned tool loop integration", () => {
 
     const json: any = await response.json();
     expect(json.choices?.[0]?.message?.tool_calls?.[0]?.function?.name).toBe("edit");
-    expect(json.choices?.[0]?.message?.tool_calls?.[0]?.function?.arguments).toContain("\"content\"");
+    expect(json.choices?.[0]?.message?.tool_calls?.[0]?.function?.arguments).toContain("\"path\":\"TODO.md\"");
+    expect(json.choices?.[0]?.message?.tool_calls?.[0]?.function?.arguments).toContain("\"old_string\":\"\"");
+    expect(json.choices?.[0]?.message?.tool_calls?.[0]?.function?.arguments).toContain("\"new_string\":\"full rewrite\"");
+    expect(json.choices?.[0]?.message?.tool_calls?.[0]?.function?.arguments).not.toContain("\"content\":");
+    expect(json.choices?.[0]?.message?.content).toBeNull();
     expect(json.choices?.[0]?.finish_reason).toBe("tool_calls");
   });
 
-  it("returns a terminal assistant error chunk when repeated invalid calls exceed loop guard threshold", async () => {
-    process.env.MOCK_CURSOR_SCENARIO = "tool-edit-invalid";
+  it("returns loop-guard terminal chunk for repeated schema-invalid edit calls", async () => {
+    process.env.MOCK_CURSOR_SCENARIO = "tool-edit-missing-path";
     process.env.MOCK_CURSOR_PROMPT_FILE = "";
 
     const response = await requestCompletion(baseURL, {
@@ -411,17 +435,17 @@ describe("OpenCode-owned tool loop integration", () => {
             {
               id: "c1",
               type: "function",
-              function: {
-                name: "edit",
-                arguments: "{\"path\":\"TODO.md\",\"content\":\"full rewrite\"}",
+                function: {
+                  name: "edit",
+                  arguments: "{\"content\":\"full rewrite\"}",
+                },
               },
-            },
-          ],
+            ],
         },
         {
           role: "tool",
           tool_call_id: "c1",
-          content: "Invalid arguments: missing required fields old_string,new_string",
+          content: "Invalid arguments: missing required field path",
         },
       ],
     });
@@ -433,7 +457,7 @@ describe("OpenCode-owned tool loop integration", () => {
     const assistantContent = chunks
       .map((chunk) => chunk.choices?.[0]?.delta?.content)
       .find((value): value is string => typeof value === "string");
-    expect(assistantContent).toContain("Tool loop guard stopped repeated failing calls to \"edit\"");
+    expect(assistantContent).toContain("Tool loop guard stopped repeated schema-invalid calls");
 
     const toolDelta = chunks.find((chunk) => chunk.choices?.[0]?.delta?.tool_calls?.length);
     expect(toolDelta).toBeUndefined();

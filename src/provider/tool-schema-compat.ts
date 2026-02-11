@@ -2,8 +2,11 @@ import type { OpenAiToolCall } from "../proxy/tool-loop.js";
 
 type JsonRecord = Record<string, unknown>;
 
+const EDIT_COMPAT_REPAIR_ENABLED = process.env.CURSOR_ACP_EDIT_COMPAT_REPAIR !== "false";
+
 const ARG_KEY_ALIASES = new Map<string, string>([
   ["filepath", "path"],
+  ["filename", "path"],
   ["file", "path"],
   ["targetfile", "path"],
   ["contents", "content"],
@@ -58,25 +61,28 @@ export function applyToolSchemaCompat(
   const originalArgKeys = Object.keys(parsedArgs);
   const { normalizedArgs, collisionKeys } = normalizeArgumentKeys(parsedArgs);
   const toolSpecificArgs = normalizeToolSpecificArgs(toolCall.function.name, normalizedArgs);
+  const schema = toolSchemaMap.get(toolCall.function.name);
+  const sanitization = sanitizeArgumentsForSchema(toolSpecificArgs, schema);
   const validation = validateToolArguments(
     toolCall.function.name,
-    toolSpecificArgs,
-    toolSchemaMap.get(toolCall.function.name),
+    sanitization.args,
+    schema,
+    sanitization.unexpected,
   );
 
   const normalizedToolCall: OpenAiToolCall = {
     ...toolCall,
     function: {
       ...toolCall.function,
-      arguments: JSON.stringify(toolSpecificArgs),
+      arguments: JSON.stringify(sanitization.args),
     },
   };
 
   return {
     toolCall: normalizedToolCall,
-    normalizedArgs: toolSpecificArgs,
+    normalizedArgs: sanitization.args,
     originalArgKeys,
-    normalizedArgKeys: Object.keys(toolSpecificArgs),
+    normalizedArgKeys: Object.keys(sanitization.args),
     collisionKeys,
     validation,
   };
@@ -128,37 +134,65 @@ function resolveCanonicalArgKey(rawKey: string): string | null {
 }
 
 function normalizeToolSpecificArgs(toolName: string, args: JsonRecord): JsonRecord {
-  if (toolName.toLowerCase() !== "todowrite") {
+  const normalizedToolName = toolName.toLowerCase();
+  if (normalizedToolName === "todowrite") {
+    if (!Array.isArray(args.todos)) {
+      return args;
+    }
+
+    const todos = args.todos.map((entry) => {
+      if (!isRecord(entry)) {
+        return entry;
+      }
+
+      const todo: JsonRecord = { ...entry };
+      if (typeof todo.status === "string") {
+        todo.status = normalizeTodoStatus(todo.status);
+      }
+      if (
+        todo.priority === undefined
+        || todo.priority === null
+        || (typeof todo.priority === "string" && todo.priority.trim().length === 0)
+      ) {
+        todo.priority = "medium";
+      }
+      return todo;
+    });
+
+    return {
+      ...args,
+      todos,
+    };
+  }
+
+  if (normalizedToolName !== "edit" || !EDIT_COMPAT_REPAIR_ENABLED) {
     return args;
   }
 
-  if (!Array.isArray(args.todos)) {
-    return args;
+  const repaired: JsonRecord = { ...args };
+  const hasStringNew = typeof repaired.new_string === "string";
+  const hasStringOld = typeof repaired.old_string === "string";
+
+  // Coerce non-string content/streamContent into a string before repair.
+  // Models frequently emit array-of-chunks (streamContent) or object payloads.
+  if (repaired.content !== undefined && typeof repaired.content !== "string") {
+    const coerced = coerceToString(repaired.content);
+    if (coerced !== null) {
+      repaired.content = coerced;
+    }
   }
 
-  const todos = args.todos.map((entry) => {
-    if (!isRecord(entry)) {
-      return entry;
-    }
+  const content = repaired.content;
 
-    const todo: JsonRecord = { ...entry };
-    if (typeof todo.status === "string") {
-      todo.status = normalizeTodoStatus(todo.status);
-    }
-    if (
-      todo.priority === undefined
-      || todo.priority === null
-      || (typeof todo.priority === "string" && todo.priority.trim().length === 0)
-    ) {
-      todo.priority = "medium";
-    }
-    return todo;
-  });
+  // Guarded compatibility repair for models that send full-content edit payloads.
+  if (!hasStringNew && typeof content === "string") {
+    repaired.new_string = content;
+  }
+  if (typeof repaired.new_string === "string" && !hasStringOld) {
+    repaired.old_string = "";
+  }
 
-  return {
-    ...args,
-    todos,
-  };
+  return repaired;
 }
 
 function normalizeTodoStatus(status: string): string {
@@ -175,10 +209,39 @@ function normalizeTodoStatus(status: string): string {
   return status;
 }
 
+function sanitizeArgumentsForSchema(
+  args: JsonRecord,
+  schema: unknown,
+): { args: JsonRecord; unexpected: string[] } {
+  if (!isRecord(schema)) {
+    return { args, unexpected: [] };
+  }
+
+  if (schema.additionalProperties !== false) {
+    return { args, unexpected: [] };
+  }
+
+  const properties = isRecord(schema.properties) ? schema.properties : {};
+  const propertyNames = new Set(Object.keys(properties));
+  const sanitized: JsonRecord = {};
+  const unexpected: string[] = [];
+
+  for (const [key, value] of Object.entries(args)) {
+    if (propertyNames.has(key)) {
+      sanitized[key] = value;
+      continue;
+    }
+    unexpected.push(key);
+  }
+
+  return { args: sanitized, unexpected };
+}
+
 function validateToolArguments(
   toolName: string,
   args: JsonRecord,
   schema: unknown,
+  unexpected: string[],
 ): ToolSchemaValidationResult {
   if (!isRecord(schema)) {
     return {
@@ -195,12 +258,6 @@ function validateToolArguments(
     ? schema.required.filter((value): value is string => typeof value === "string")
     : [];
   const missing = required.filter((key) => !hasOwn(args, key));
-
-  const allowAdditional = schema.additionalProperties !== false;
-  const propertyNames = new Set(Object.keys(properties));
-  const unexpected = allowAdditional
-    ? []
-    : Object.keys(args).filter((key) => !propertyNames.has(key));
 
   const typeErrors: string[] = [];
   for (const [key, value] of Object.entries(args)) {
@@ -222,7 +279,7 @@ function validateToolArguments(
     }
   }
 
-  const ok = missing.length === 0 && unexpected.length === 0 && typeErrors.length === 0;
+  const ok = missing.length === 0 && typeErrors.length === 0;
   return {
     hasSchema: true,
     ok,
@@ -286,6 +343,55 @@ function matchesType(value: unknown, schemaType: unknown): boolean {
     default:
       return true;
   }
+}
+
+function coerceToString(value: unknown): string | null {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (Array.isArray(value)) {
+    const parts: string[] = [];
+    for (const item of value) {
+      if (typeof item === "string") {
+        parts.push(item);
+      } else if (isRecord(item)) {
+        const text = typeof item.text === "string"
+          ? item.text
+          : typeof item.content === "string"
+            ? item.content
+            : typeof item.value === "string"
+              ? item.value
+              : null;
+        if (text !== null) {
+          parts.push(text);
+        } else {
+          parts.push(JSON.stringify(item));
+        }
+      } else {
+        parts.push(String(item));
+      }
+    }
+    return parts.length > 0 ? parts.join("") : null;
+  }
+  if (isRecord(value)) {
+    if (typeof value.text === "string") {
+      return value.text;
+    }
+    if (typeof value.content === "string") {
+      return value.content;
+    }
+    if (typeof value.value === "string") {
+      return value.value;
+    }
+    return JSON.stringify(value);
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  return null;
 }
 
 function hasOwn(record: JsonRecord, key: string): boolean {
