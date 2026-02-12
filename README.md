@@ -183,55 +183,28 @@ Common models: `auto`, `sonnet-4.5`, `opus-4.6-thinking`, `opus-4.6`, `gpt-5.2`,
 
 ```mermaid
 flowchart TB
-    subgraph SETUP["📦 Setup (one-time)"]
-        direction TB
-        INSTALL["install.sh / TUI installer"]
-        BUILD["bun install && bun run build"]
-        SYNC["sync-models.sh\ncursor-agent models → parse"]
-        INSTALL --> BUILD --> SYNC
-    end
+    OC["OpenCode"] --> SDK["@ai-sdk/openai-compatible"]
+    SDK -->|"POST /v1/chat/completions"| PROXY["cursor-acp proxy :32124"]
+    PROXY -->|"spawn per request"| AGENT["cursor-agent --output-format stream-json"]
+    AGENT -->|"HTTPS"| CURSOR["Cursor API"]
+    CURSOR --> AGENT
 
-    subgraph AUTH_FLOW["🔑 Auth (one-time)"]
-        direction TB
-        LOGIN["opencode auth login\nor cursor-agent login"]
-        BROWSER["Browser OAuth\ncursor.com"]
-        LOGIN -->|"open URL"| BROWSER
-        BROWSER -->|"token saved"| CREDS
-    end
+    AGENT -->|"assistant / thinking events"| SSE["SSE content chunks"]
+    AGENT -->|"tool_call event"| BOUNDARY["Provider boundary (v1 default)"]
+    BOUNDARY --> COMPAT["Schema compat + alias normalization"]
+    COMPAT --> GUARD["Tool-loop guard"]
+    GUARD -->|"emit tool_calls + finish_reason=tool_calls"| SDK
+    SDK --> OC
 
-    subgraph CONFIG["⚙️ Config & Credentials"]
-        direction LR
-        SYMLINK["~/.config/opencode/plugin/cursor-acp.js\n→ dist/plugin-entry.js"]
-        CONF["~/.config/opencode/opencode.json\nprovider · models · baseURL"]
-        CREDS["~/.cursor/auth.json\nor ~/.config/cursor/cli-config.json"]
-    end
-
-    subgraph RUNTIME["▶ Runtime (every request)"]
-        direction TB
-        OC["OpenCode"]
-        SDK["@ai-sdk/openai-compatible"]
-        PROXY["cursor-acp HTTP proxy\n:32124"]
-        CA["cursor-agent\nstdin→prompt · stdout→response"]
-        API["Cursor API"]
-
-        OC -->|"select model"| SDK
-        SDK -->|"POST /v1/chat/completions"| PROXY
-        PROXY -->|"spawn + pipe stdin"| CA
-        CA -->|"HTTPS"| API
-        API -->|"response"| CA
-        CA -->|"stdout"| PROXY
-        PROXY -->|"SSE stream"| SDK
-        SDK --> OC
-    end
-
-    SETUP -.->|"creates"| SYMLINK
-    SETUP -.->|"populates"| CONF
-    SYMLINK -.->|"loads plugin"| PROXY
-    CONF -.->|"configures"| SDK
-    CREDS -.->|"reads token"| CA
+    OC -->|"execute tool locally"| TOOLRUN["OpenCode tool runtime"]
+    TOOLRUN -->|"next request includes role:tool result"| SDK
+    SDK -->|"TOOL_RESULT prompt block"| AGENT
 ```
 
-**Setup** runs once during installation. **Auth** creates credentials via browser OAuth. At **runtime**, every request flows through the HTTP proxy which spawns `cursor-agent` per call, piping prompts via stdin to avoid shell argument limits.
+Default mode is `CURSOR_ACP_TOOL_LOOP_MODE=opencode`: OpenCode owns tool execution, while cursor-acp intercepts and translates `cursor-agent` tool calls into OpenAI-compatible `tool_calls` responses.  
+Legacy execution mode (`proxy-exec`) is still available for local/SDK/MCP execution through the internal router.
+
+Detailed architecture: `docs/architecture/runtime-tool-loop.md`.
 
 ## Alternatives
 
@@ -244,7 +217,7 @@ flowchart TB
 | **Error Parsing** |    ✓ (quota/auth/model)     |                                               ✗                                                |                                          ✗                                           |                              Debug logging                               |
 | **Installer**     |      ✓ TUI + one-liner      |                                               ✗                                                |                                          ✗                                           |                                    ✗                                     |
 | **OAuth Flow**    |   ✓ OpenCode integration    |                                            ✓ Native                                            |                                    Browser login                                     |                                 Keychain                                 |
-| **Tool Calling**  | ✓ Native (7 built-in + SDK/MCP) |                                            ✓ Native                                            |                                    ✓ Experimental                                    |                                    ✗                                     |
+| **Tool Calling**  | ✓ OpenCode-owned loop (default) + proxy-exec mode |                                            ✓ Native                                            |                                    ✓ Experimental                                    |                                    ✗                                     |
 | **Stability**     | Stable (uses official CLI)  |                                          Experimental                                          |                                        Stable                                        |                               Experimental                               |
 | **Dependencies**  |      bun, cursor-agent      |                                              npm                                               |                                  bun, cursor-agent                                   |                               Node.js 18+                                |
 | **Port**          |            32124            |                                             18741                                              |                                        32123                                         |                                   4141                                   |
@@ -255,7 +228,7 @@ flowchart TB
 - Structured error parsing with actionable suggestions
 - Cross-platform (not locked to macOS Keychain)
 - TUI installer for easy setup
-- Native tool calling with 7 built-in tools, SDK and MCP executor support, and a skills/alias system
+- Native tool calling with 10 built-in tools, SDK/MCP executor support, and a skills/alias system
 - Uses official cursor-agent CLI (more stable than reverse-engineering Connect-RPC)
 
 ## Prerequisites

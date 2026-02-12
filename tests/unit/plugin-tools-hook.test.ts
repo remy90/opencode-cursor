@@ -47,6 +47,7 @@ describe("Plugin tool hook", () => {
     // Verify default tools are registered
     const toolNames = Object.keys(hooks.tool || {});
     expect(toolNames).toContain("bash");
+    expect(toolNames).toContain("shell");
     expect(toolNames).toContain("read");
     expect(toolNames).toContain("write");
     expect(toolNames).toContain("edit");
@@ -60,6 +61,12 @@ describe("Plugin tool hook", () => {
     expect(bashTool?.description).toBeDefined();
     expect(bashTool?.args).toBeDefined();
     expect(typeof bashTool?.execute).toBe("function");
+
+    const shellTool = hooks.tool?.shell;
+    expect(shellTool).toBeDefined();
+    expect(shellTool?.description).toBeDefined();
+    expect(shellTool?.args).toBeDefined();
+    expect(typeof shellTool?.execute).toBe("function");
   });
 
   it("resolves relative write paths against context directory", async () => {
@@ -87,6 +94,23 @@ describe("Plugin tool hook", () => {
     try {
       const hooks = await CursorPlugin(createMockInput(projectDir));
       const out = await hooks.tool?.bash?.execute(
+        {
+          command: "pwd",
+        },
+        createToolContext(projectDir),
+      );
+
+      expect(realpathSync((out || "").trim())).toBe(realpathSync(projectDir));
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it("executes shell alias and defaults cwd to context directory", async () => {
+    const projectDir = mkdtempSync(join(tmpdir(), "plugin-hook-shell-"));
+    try {
+      const hooks = await CursorPlugin(createMockInput(projectDir));
+      const out = await hooks.tool?.shell?.execute(
         {
           command: "pwd",
         },

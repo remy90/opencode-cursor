@@ -1391,20 +1391,27 @@ function buildToolHookEntries(registry: CoreRegistry): Record<string, any> {
     if (!handler) continue;
 
     const zodArgs = jsonSchemaToZod(t.parameters);
+    const createEntry = (toolName: string) =>
+      tool({
+        description: t.description,
+        args: zodArgs,
+        async execute(args: any, context: any) {
+          try {
+            const normalizedArgs = applyToolContextDefaults(toolName, args, context);
+            return await handler(normalizedArgs);
+          } catch (error: any) {
+            log.warn("Tool hook execution failed", { tool: toolName, error: String(error?.message || error) });
+            throw error;
+          }
+        },
+      });
 
-    entries[t.name] = tool({
-      description: t.description,
-      args: zodArgs,
-      async execute(args: any, context: any) {
-        try {
-          const normalizedArgs = applyToolContextDefaults(t.name, args, context);
-          return await handler(normalizedArgs);
-        } catch (error: any) {
-          log.warn("Tool hook execution failed", { tool: t.name, error: String(error?.message || error) });
-          throw error;
-        }
-      },
-    });
+    entries[t.name] = createEntry(t.name);
+
+    // Some agent variants emit "shell" instead of "bash".
+    if (t.name === "bash" && !entries.shell) {
+      entries.shell = createEntry("shell");
+    }
   }
 
   return entries;
