@@ -36,6 +36,24 @@ type CheckResult = {
   warning?: boolean;
 };
 
+type StatusResult = {
+  plugin: {
+    path: string;
+    type: "symlink" | "file" | "missing";
+    target?: string;
+  };
+  provider: {
+    configPath: string;
+    name: string;
+    enabled: boolean;
+    baseUrl: string;
+    modelCount: number;
+  };
+  aiSdk: {
+    installed: boolean;
+  };
+};
+
 export function checkBun(): CheckResult {
   try {
     const version = execFileSync("bun", ["--version"], { encoding: "utf8" }).trim();
@@ -187,6 +205,7 @@ type Options = {
   copy?: boolean;
   skipModels?: boolean;
   noBackup?: boolean;
+  json?: boolean;
 };
 
 const PROVIDER_ID = "cursor-acp";
@@ -238,6 +257,8 @@ function parseArgs(argv: string[]): { command: Command; options: Options } {
     } else if (arg === "--base-url" && rest[i + 1]) {
       options.baseUrl = rest[i + 1];
       i += 1;
+    } else if (arg === "--json") {
+      options.json = true;
     } else {
       throw new Error(`Unknown argument: ${arg}`);
     }
@@ -429,23 +450,91 @@ function commandUninstall(options: Options) {
   console.log(`Removed provider "${PROVIDER_ID}" from ${configPath}`);
 }
 
-function commandStatus(options: Options) {
-  const { configPath, pluginPath } = resolvePaths(options);
-  const pluginExists = existsSync(pluginPath);
-  const pluginType = pluginExists ? (lstatSync(pluginPath).isSymbolicLink() ? "symlink" : "file") : "missing";
-
-  let providerExists = false;
-  let pluginEnabled = false;
-  if (existsSync(configPath)) {
-    const config = readConfig(configPath);
-    providerExists = Boolean(config.provider?.[PROVIDER_ID]);
-    pluginEnabled = Array.isArray(config.plugin) && config.plugin.includes(PROVIDER_ID);
+export function getStatusResult(configPath: string, pluginPath: string): StatusResult {
+  // Plugin
+  let pluginType: "symlink" | "file" | "missing" = "missing";
+  let pluginTarget: string | undefined;
+  if (existsSync(pluginPath)) {
+    const stat = lstatSync(pluginPath);
+    pluginType = stat.isSymbolicLink() ? "symlink" : "file";
+    if (pluginType === "symlink") {
+      try {
+        pluginTarget = readFileSync(pluginPath, "utf8");
+      } catch {
+        pluginTarget = undefined;
+      }
+    }
   }
 
-  console.log(`Plugin file: ${pluginPath} (${pluginType})`);
-  console.log(`Provider in config: ${providerExists ? "yes" : "no"}`);
-  console.log(`Plugin enabled in config: ${pluginEnabled ? "yes" : "no"}`);
-  console.log(`Config path: ${configPath}`);
+  // Provider
+  let providerEnabled = false;
+  let baseUrl = "http://127.0.0.1:32124/v1";
+  let modelCount = 0;
+  if (existsSync(configPath)) {
+    const config = readConfig(configPath);
+    const provider = config.provider?.["cursor-acp"];
+    providerEnabled = !!provider;
+    if (provider?.options?.baseURL) {
+      baseUrl = provider.options.baseURL;
+    }
+    modelCount = Object.keys(provider?.models || {}).length;
+  }
+
+  // AI SDK
+  const opencodeDir = dirname(configPath);
+  const sdkPath = join(opencodeDir, "node_modules", "@ai-sdk", "openai-compatible");
+  const aiSdkInstalled = existsSync(sdkPath);
+
+  return {
+    plugin: {
+      path: pluginPath,
+      type: pluginType,
+      target: pluginTarget,
+    },
+    provider: {
+      configPath,
+      name: "cursor-acp",
+      enabled: providerEnabled,
+      baseUrl,
+      modelCount,
+    },
+    aiSdk: {
+      installed: aiSdkInstalled,
+    },
+  };
+}
+
+function commandStatus(options: Options) {
+  const { configPath, pluginPath } = resolvePaths(options);
+  const result = getStatusResult(configPath, pluginPath);
+
+  if (options.json) {
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  console.log("");
+  console.log("Plugin");
+  console.log(`  Path: ${result.plugin.path}`);
+  if (result.plugin.type === "symlink" && result.plugin.target) {
+    console.log(`  Type: symlink → ${result.plugin.target}`);
+  } else if (result.plugin.type === "file") {
+    console.log(`  Type: file (copy)`);
+  } else {
+    console.log(`  Type: missing`);
+  }
+
+  console.log("");
+  console.log("Provider");
+  console.log(`  Config: ${result.provider.configPath}`);
+  console.log(`  Name: ${result.provider.name}`);
+  console.log(`  Enabled: ${result.provider.enabled ? "yes" : "no"}`);
+  console.log(`  Base URL: ${result.provider.baseUrl}`);
+  console.log(`  Models: ${result.provider.modelCount}`);
+
+  console.log("");
+  console.log("AI SDK");
+  console.log(`  @ai-sdk/openai-compatible: ${result.aiSdk.installed ? "installed" : "not installed"}`);
 }
 
 function commandDoctor(options: Options) {

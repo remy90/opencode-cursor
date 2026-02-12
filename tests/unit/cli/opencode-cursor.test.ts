@@ -6,6 +6,7 @@ import {
   checkCursorAgent,
   checkCursorAgentLogin,
   runDoctorChecks,
+  getStatusResult,
 } from "../../../src/cli/opencode-cursor.js";
 
 describe("cli/opencode-cursor branding", () => {
@@ -46,5 +47,14 @@ describe("cli/opencode-cursor commandDoctor", () => {
     const results = runDoctorChecks("/tmp/test-config.json", "/tmp/test-plugin");
     expect(results.length).toBeGreaterThan(5);
     expect(results.every(r => typeof r.passed === "boolean")).toBe(true);
+  });
+});
+
+describe("cli/opencode-cursor status", () => {
+  it("getStatusResult returns structured data", () => {
+    const result = getStatusResult("/tmp/test-config.json", "/tmp/test-plugin");
+    expect(result).toHaveProperty("plugin");
+    expect(result).toHaveProperty("provider");
+    expect(result).toHaveProperty("aiSdk");
   });
 });
