@@ -165,6 +165,19 @@ function checkAiSdk(opencodeDir: string): CheckResult {
   }
 }
 
+export function runDoctorChecks(configPath: string, pluginPath: string): CheckResult[] {
+  const opencodeDir = dirname(configPath);
+  return [
+    checkBun(),
+    checkCursorAgent(),
+    checkCursorAgentLogin(),
+    checkOpenCode(),
+    checkPluginFile(pluginPath),
+    checkProviderConfig(configPath),
+    checkAiSdk(opencodeDir),
+  ];
+}
+
 type Command = "install" | "sync-models" | "uninstall" | "status" | "doctor" | "help";
 
 type Options = {
@@ -435,6 +448,26 @@ function commandStatus(options: Options) {
   console.log(`Config path: ${configPath}`);
 }
 
+function commandDoctor(options: Options) {
+  const { configPath, pluginPath } = resolvePaths(options);
+  const checks = runDoctorChecks(configPath, pluginPath);
+
+  console.log("");
+  for (const check of checks) {
+    const symbol = check.passed ? "\u2713" : (check.warning ? "\u26A0" : "\u2717");
+    const color = check.passed ? "\x1b[32m" : (check.warning ? "\x1b[33m" : "\x1b[31m");
+    console.log(` ${color}${symbol}\x1b[0m ${check.name}: ${check.message}`);
+  }
+
+  const failed = checks.filter(c => !c.passed && !c.warning);
+  console.log("");
+  if (failed.length === 0) {
+    console.log("All checks passed!");
+  } else {
+    console.log(`${failed.length} check(s) failed. See messages above.`);
+  }
+}
+
 function main() {
   let parsed: { command: Command; options: Options };
   try {
@@ -462,7 +495,7 @@ function main() {
         commandStatus(parsed.options);
         return;
       case "doctor":
-        console.log("doctor command not yet implemented");
+        commandDoctor(parsed.options);
         return;
       case "help":
         printHelp();

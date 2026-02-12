@@ -5,6 +5,7 @@ import {
   checkBun,
   checkCursorAgent,
   checkCursorAgentLogin,
+  runDoctorChecks,
 } from "../../../src/cli/opencode-cursor.js";
 
 describe("cli/opencode-cursor branding", () => {
@@ -37,5 +38,13 @@ describe("cli/opencode-cursor doctor checks", () => {
     const result = checkCursorAgentLogin();
     expect(result.name).toBe("cursor-agent login");
     expect(typeof result.passed).toBe("boolean");
+  });
+});
+
+describe("cli/opencode-cursor commandDoctor", () => {
+  it("runs all checks and returns results", () => {
+    const results = runDoctorChecks("/tmp/test-config.json", "/tmp/test-plugin");
+    expect(results.length).toBeGreaterThan(5);
+    expect(results.every(r => typeof r.passed === "boolean")).toBe(true);
   });
 });
