@@ -15,6 +15,8 @@ No prompt limits. No broken streams. Full thinking + tool support in Opencode. Y
 curl -fsSL https://raw.githubusercontent.com/Nomadcxx/opencode-cursor/main/install.sh | bash
 ```
 
+Note: if `npm` is available, `install.sh` installs/upgrades `@rama_nigg/open-cursor` and runs `open-cursor install`. Otherwise it falls back to building from source.
+
 **Option B: npm Package (Use when published)**
 
 Check whether the package is available on npm first:
