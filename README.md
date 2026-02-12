@@ -15,20 +15,18 @@ No prompt limits. No broken streams. Full thinking + tool support in Opencode. Y
 curl -fsSL https://raw.githubusercontent.com/Nomadcxx/opencode-cursor/main/install.sh | bash
 ```
 
-Note: if `npm` is available, `install.sh` installs/upgrades `@rama_nigg/open-cursor` and configures OpenCode automatically. Otherwise it falls back to building from source.
-
 **Option B: npm Package (Recommended)**
 
 ```bash
 npm install -g @rama_nigg/open-cursor
-npm exec -- @rama_nigg/open-cursor install
+open-cursor install
 ```
 
 Upgrade later with:
 
 ```bash
 npm update -g @rama_nigg/open-cursor
-npm exec -- @rama_nigg/open-cursor install
+open-cursor install
 ```
 
 **Option C: TUI Installer**
@@ -48,7 +46,7 @@ Install the cursor-acp plugin for OpenCode:
 
 1. Preferred install (npm):
    npm install -g @rama_nigg/open-cursor
-   npm exec -- @rama_nigg/open-cursor install
+   open-cursor install
 
 2. Fallback (build from source):
    git clone https://github.com/Nomadcxx/opencode-cursor.git
@@ -131,28 +129,6 @@ opencode run "your prompt" --model cursor-acp/auto
 opencode run "your prompt" --model cursor-acp/sonnet-4.5
 ```
 
-## Models
-
-Models are pulled from `cursor-agent models` and written to your config during installation. If Cursor adds new models later:
-
-```bash
-npm exec -- @rama_nigg/open-cursor install
-```
-
-Or, if you installed from source (no npm CLI):
-
-```bash
-./scripts/sync-models.sh
-```
-
-The proxy also exposes a `/v1/models` endpoint that fetches models in real-time:
-
-```bash
-curl http://127.0.0.1:32124/v1/models
-```
-
-Common models: `auto`, `composer-1.5`, `gpt-5.3-codex`, `opus-4.6-thinking`, `sonnet-4.5`, `gemini-3-pro`, `grok`
-
 ## Architecture
 
 ```mermaid
@@ -196,15 +172,6 @@ Detailed architecture: [docs/architecture/runtime-tool-loop.md](docs/architectur
 | **Dependencies**  |      bun, cursor-agent      |                                              npm                                               |                                  bun, cursor-agent                                   |                               Node.js 18+                                |
 | **Port**          |            32124            |                                             18741                                              |                                        32123                                         |                                   4141                                   |
 
-**Key advantages of cursor-acp:**
-
-- Avoids E2BIG errors with large prompts (uses HTTP body, not CLI args)
-- Structured error parsing with actionable suggestions
-- Cross-platform (not locked to macOS Keychain)
-- TUI installer for easy setup
-- Native tool calling with 10 built-in tools, SDK/MCP executor support, and a skills/alias system
-- Uses official cursor-agent CLI (more stable than reverse-engineering Connect-RPC)
-
 ## Prerequisites
 
 - [Bun](https://bun.sh/)
@@ -247,10 +214,6 @@ Integration CI pins OpenCode-owned loop mode to deterministic settings:
 - `CURSOR_ACP_FORWARD_TOOL_CALLS=false`
 - `CURSOR_ACP_EMIT_TOOL_UPDATES=false`
 
-## Publishing
-
-For maintainers, release and npm publish steps are documented in [docs/PUBLISHING.md](docs/PUBLISHING.md).
-
 ## Troubleshooting
 
 **"fetch() URL is invalid"** - Run `opencode auth login` without arguments
@@ -271,26 +234,10 @@ Common causes:
 
 ### Debug Logging
 
-Set the log level via environment variable:
-- `CURSOR_ACP_LOG_LEVEL=debug` - Verbose output for troubleshooting
-- `CURSOR_ACP_LOG_LEVEL=info` - Default level
-- `CURSOR_ACP_LOG_LEVEL=warn` - Warnings and errors only
-- `CURSOR_ACP_LOG_LEVEL=error` - Errors only
-
-Provider-boundary rollout:
-- Default: `CURSOR_ACP_PROVIDER_BOUNDARY=v1`
-- Default: `CURSOR_ACP_PROVIDER_BOUNDARY_AUTOFALLBACK=true`
-- `CURSOR_ACP_PROVIDER_BOUNDARY=legacy` - Original provider/runtime boundary behavior
-- `CURSOR_ACP_PROVIDER_BOUNDARY=v1` - Shared boundary/interception path
-- `CURSOR_ACP_PROVIDER_BOUNDARY_AUTOFALLBACK=false` - Disable fallback and keep strict `v1` behavior
-- `CURSOR_ACP_TOOL_LOOP_MAX_REPEAT=3` - Max repeated failing tool-call fingerprints before guard termination (or fallback when enabled)
-
-Auto-fallback trigger conditions:
-- Only active when `CURSOR_ACP_PROVIDER_BOUNDARY=v1`
-- Triggered when `v1` boundary extraction throws during tool-call interception
-- Triggered when the tool-loop guard threshold is reached (same tool + arg shape + error class)
-- Does not trigger for normal cases like disallowed tools or no tool call
-- Does not trigger for unrelated runtime errors (for example, tool mapper/tool execution failures)
+Enable verbose logs:
+```bash
+CURSOR_ACP_LOG_LEVEL=debug opencode run "your prompt" --model cursor-acp/auto
+```
 
 Disable log output entirely:
 ```bash
