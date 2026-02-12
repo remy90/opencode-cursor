@@ -68,6 +68,30 @@ function getGlobalKey(): string {
   return "__opencode_cursor_proxy_server__";
 }
 
+function resolveWorkspaceDirectory(directory: string | undefined): string {
+  const envWorkspace = process.env.CURSOR_ACP_WORKSPACE?.trim();
+  if (envWorkspace) {
+    return resolve(envWorkspace);
+  }
+
+  const configHome = process.env.XDG_CONFIG_HOME
+    ? resolve(process.env.XDG_CONFIG_HOME)
+    : join(homedir(), ".config");
+  const configPrefix = join(configHome, "opencode");
+
+  const dirCandidate = directory ? resolve(directory) : "";
+  if (dirCandidate && !dirCandidate.startsWith(configPrefix)) {
+    return dirCandidate;
+  }
+
+  const cwd = process.cwd();
+  if (cwd && !cwd.startsWith(configPrefix)) {
+    return cwd;
+  }
+
+  return dirCandidate || cwd || configPrefix;
+}
+
 const FORCE_TOOL_MODE = process.env.CURSOR_ACP_FORCE !== "false";
 const EMIT_TOOL_UPDATES = process.env.CURSOR_ACP_EMIT_TOOL_UPDATES === "true";
 const FORWARD_TOOL_CALLS = process.env.CURSOR_ACP_FORWARD_TOOL_CALLS !== "false";
@@ -1421,7 +1445,8 @@ function buildToolHookEntries(registry: CoreRegistry): Record<string, any> {
  * OpenCode plugin for Cursor Agent
  */
 export const CursorPlugin: Plugin = async ({ $, directory, client, serverUrl }: PluginInput) => {
-  log.debug("Plugin initializing", { directory, serverUrl: serverUrl?.toString() });
+  const workspaceDirectory = resolveWorkspaceDirectory(directory);
+  log.debug("Plugin initializing", { directory, workspaceDirectory, serverUrl: serverUrl?.toString() });
   if (!TOOL_LOOP_MODE_VALID) {
     log.warn("Invalid CURSOR_ACP_TOOL_LOOP_MODE; defaulting to opencode", { value: TOOL_LOOP_MODE_RAW });
   }
@@ -1458,7 +1483,7 @@ export const CursorPlugin: Plugin = async ({ $, directory, client, serverUrl }: 
   // FORWARD_TOOL_CALLS is only used when TOOL_LOOP_MODE=proxy-exec.
   // Build a client with serverUrl so SDK tool.list works even if the injected client isn't fully configured.
   const serverClient = legacyProxyToolPathsEnabled
-    ? createOpencodeClient({ baseUrl: serverUrl.toString(), directory })
+    ? createOpencodeClient({ baseUrl: serverUrl.toString(), directory: workspaceDirectory })
     : null;
   const discovery = legacyProxyToolPathsEnabled ? new OpenCodeToolDiscovery(serverClient ?? client) : null;
 
@@ -1560,7 +1585,7 @@ export const CursorPlugin: Plugin = async ({ $, directory, client, serverUrl }: 
     return toolEntries;
   }
 
-  const proxyBaseURL = await ensureCursorProxyServer(directory, router);
+  const proxyBaseURL = await ensureCursorProxyServer(workspaceDirectory, router);
   log.debug("Proxy server started", { baseURL: proxyBaseURL });
 
   // Build tool hook entries from local registry
