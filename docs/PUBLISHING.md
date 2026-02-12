@@ -10,7 +10,10 @@ This project is publishable as the npm package `@rama_nigg/open-cursor`. The bin
 
 ## Release Checklist
 
-1. Update version in `package.json` (semver).
+1. Decide if this is a publish-worthy change.
+   - Docs-only or refactors with no user-visible behavior change: do not publish.
+   - User-visible changes (plugin behavior, installer behavior, CLI behavior): publish.
+2. Update version in `package.json` (semver) only when publishing.
 2. Build and run tests locally:
    - `bun install`
    - `bun run build`
@@ -37,3 +40,9 @@ Publish step:
 - `npm publish --access public`
 
 If you need a non-publish validation run, execute the same build/test steps locally and use `npm pack --dry-run`.
+
+## Dist Tags (Optional)
+
+Use dist-tags for pre-releases instead of publishing a rapid stream of patch versions:
+- `latest`: stable releases
+- `beta`: pre-release channel (for example `2.2.0-beta.1`)

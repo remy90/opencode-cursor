@@ -25,9 +25,11 @@ Reference implementation style: `/home/nomadx/Documents/jellywatch/cmd/jellywatc
 Binary name: `open-cursor`
 
 Commands:
-- `open-cursor install`
+- `open-cursor install` (idempotent)
+  - Configure OpenCode for Cursor in one step. This is safe to re-run any time.
   - Ensure plugin file exists: `~/.config/opencode/plugin/cursor-acp.js` (or XDG equivalent)
   - Ensure provider config exists/merged in `opencode.json` (baseURL + models)
+  - Sync models from `cursor-agent models` into the config (no separate script required)
   - Best-effort ensure `@ai-sdk/openai-compatible` is installed in `~/.config/opencode`
 - `open-cursor sync-models`
   - Run `cursor-agent models`, update provider models in config
@@ -39,13 +41,16 @@ Commands:
 - Optional (later): `open-cursor doctor`
   - Validate cursor-agent presence, login state, and common misconfigurations
 
-Flags (consistent across install/sync/uninstall):
+Flags (keep v1 simple):
 - `--config <path>` default `$XDG_CONFIG_HOME/opencode/opencode.json` (else `~/.config/opencode/opencode.json`)
 - `--plugin-dir <path>` default `$XDG_CONFIG_HOME/opencode/plugin`
-- `--base-url <url>` default `http://127.0.0.1:32124/v1`
 - `--copy` copy plugin-entry instead of symlink
-- `--skip-models` (install only)
 - `--no-backup`
+
+Advanced (optional; only add if needed):
+- `--base-url <url>` override proxy baseURL (default `http://127.0.0.1:32124/v1`).
+  Rationale: users running the proxy on a different host/port.
+- `--skip-models` skip `cursor-agent models` (useful for CI or offline installs).
 
 Backups:
 - Always create `<config>.bak.<timestamp>` unless `--no-backup`.
@@ -98,4 +103,3 @@ Add a small integration test harness in Go:
 
 Do not publish to npm for docs-only changes.
 Only publish when user-facing behavior changes (plugin behavior, installer behavior, CLI behavior).
-
