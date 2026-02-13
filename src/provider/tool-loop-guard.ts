@@ -84,7 +84,6 @@ export function createToolLoopGuard(
         const successFingerprint = `${toolCall.function.name}|values:${valueSignature}|success`;
         const repeatCount = (counts.get(successFingerprint) ?? 0) + 1;
         counts.set(successFingerprint, repeatCount);
-        const strictTriggered = repeatCount > maxRepeat;
 
         // Some tools (notably edit/write) can get stuck in "successful" loops where
         // the model keeps re-issuing the same operation with slightly different
@@ -101,19 +100,15 @@ export function createToolLoopGuard(
         if (coarseSuccessFingerprint) {
           coarseCounts.set(coarseSuccessFingerprint, coarseRepeatCount);
         }
-        // Coarse fingerprints are intentionally less specific; give them a slightly
-        // higher threshold to reduce false positives.
-        const coarseMaxRepeat = maxRepeat + 1;
         const coarseTriggered = coarseSuccessFingerprint
-          ? coarseRepeatCount > coarseMaxRepeat
+          ? coarseRepeatCount > maxRepeat
           : false;
-        const preferCoarseFingerprint = coarseTriggered && !strictTriggered;
         return {
-          fingerprint: preferCoarseFingerprint ? coarseSuccessFingerprint! : successFingerprint,
-          repeatCount: preferCoarseFingerprint ? coarseRepeatCount : repeatCount,
-          maxRepeat: preferCoarseFingerprint ? coarseMaxRepeat : maxRepeat,
+          fingerprint: coarseTriggered ? coarseSuccessFingerprint! : successFingerprint,
+          repeatCount: coarseTriggered ? coarseRepeatCount : repeatCount,
+          maxRepeat,
           errorClass,
-          triggered: strictTriggered || coarseTriggered,
+          triggered: repeatCount > maxRepeat || coarseTriggered,
           tracked: true,
         };
       }
